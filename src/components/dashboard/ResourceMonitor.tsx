@@ -90,7 +90,15 @@ const ResourceMonitor = () => {
                     <Cell key={`cell-${index}`} fill={entry.color} />
                   ))}
                 </Pie>
-                <Tooltip />
+                <Tooltip 
+                  contentStyle={{ 
+                    backgroundColor: 'hsl(var(--popover))',
+                    border: '1px solid hsl(var(--border))',
+                    borderRadius: '8px',
+                    color: 'hsl(var(--foreground))'
+                  }}
+                  cursor={{ fill: 'hsl(var(--muted))' }}
+                />
               </PieChart>
             </ResponsiveContainer>
           </CardContent>
@@ -119,7 +127,14 @@ const ResourceMonitor = () => {
                     <Cell key={`cell-${index}`} fill={entry.color} />
                   ))}
                 </Pie>
-                <Tooltip />
+                <Tooltip 
+                  contentStyle={{ 
+                    backgroundColor: 'hsl(var(--popover))',
+                    border: '1px solid hsl(var(--border))',
+                    borderRadius: '8px',
+                    color: 'hsl(var(--foreground))'
+                  }}
+                />
               </PieChart>
             </ResponsiveContainer>
           </CardContent>
@@ -140,10 +155,12 @@ const ResourceMonitor = () => {
                   contentStyle={{ 
                     backgroundColor: 'hsl(var(--popover))',
                     border: '1px solid hsl(var(--border))',
-                    borderRadius: '8px'
+                    borderRadius: '8px',
+                    color: 'hsl(var(--foreground))'
                   }}
+                  cursor={{ fill: 'hsl(var(--muted))' }}
                 />
-                <Legend />
+                <Legend wrapperStyle={{ color: 'hsl(var(--foreground))' }} />
                 <Bar dataKey="allocated" fill="hsl(var(--primary))" name="Allocated" />
                 <Bar dataKey="idle" fill="hsl(var(--muted))" name="Idle" />
               </BarChart>
