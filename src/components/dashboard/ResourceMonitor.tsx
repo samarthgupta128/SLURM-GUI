@@ -85,6 +85,7 @@ const ResourceMonitor = () => {
                   outerRadius={80}
                   fill="#8884d8"
                   dataKey="value"
+                  style={{ fill: 'white', fontSize: '14px', fontWeight: '500' }}
                 >
                   {nodeData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.color} />
@@ -122,6 +123,7 @@ const ResourceMonitor = () => {
                   outerRadius={80}
                   fill="#8884d8"
                   dataKey="value"
+                  style={{ fill: 'white', fontSize: '14px', fontWeight: '500' }}
                 >
                   {memoryData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.color} />
