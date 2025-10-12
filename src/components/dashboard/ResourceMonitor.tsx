@@ -1,15 +1,9 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from "recharts";
+import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 
 const nodeData = [
   { name: "Allocated", value: 18, color: "hsl(var(--primary))" },
   { name: "Idle", value: 14, color: "hsl(var(--muted))" },
-];
-
-const partitionData = [
-  { partition: "GPU", allocated: 8, idle: 4 },
-  { partition: "CPU", allocated: 6, idle: 6 },
-  { partition: "Memory", allocated: 4, idle: 4 },
 ];
 
 const memoryData = [
@@ -90,15 +84,6 @@ const ResourceMonitor = () => {
                     <Cell key={`cell-${index}`} fill={entry.color} />
                   ))}
                 </Pie>
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: 'hsl(var(--popover))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: '8px',
-                    color: 'hsl(var(--foreground))'
-                  }}
-                  cursor={{ fill: 'hsl(var(--muted))' }}
-                />
               </PieChart>
             </ResponsiveContainer>
           </CardContent>
@@ -127,43 +112,7 @@ const ResourceMonitor = () => {
                     <Cell key={`cell-${index}`} fill={entry.color} />
                   ))}
                 </Pie>
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: 'hsl(var(--popover))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: '8px',
-                    color: 'hsl(var(--foreground))'
-                  }}
-                />
               </PieChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        {/* Partition Usage Bar Chart */}
-        <Card className="md:col-span-2">
-          <CardHeader>
-            <CardTitle>Per Partition Node Usage</CardTitle>
-            <CardDescription>Resource allocation across partitions</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={partitionData}>
-                <XAxis dataKey="partition" stroke="hsl(var(--muted-foreground))" />
-                <YAxis stroke="hsl(var(--muted-foreground))" />
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: 'hsl(var(--popover))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: '8px',
-                    color: 'hsl(var(--foreground))'
-                  }}
-                  cursor={{ fill: 'hsl(var(--muted))' }}
-                />
-                <Legend wrapperStyle={{ color: 'hsl(var(--foreground))' }} />
-                <Bar dataKey="allocated" fill="hsl(var(--primary))" name="Allocated" />
-                <Bar dataKey="idle" fill="hsl(var(--muted))" name="Idle" />
-              </BarChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>

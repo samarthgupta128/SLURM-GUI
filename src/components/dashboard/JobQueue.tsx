@@ -62,7 +62,7 @@ const JobQueue = () => {
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              Waiting for resources
+              Waiting in queue
             </p>
           </CardContent>
         </Card>
@@ -71,86 +71,84 @@ const JobQueue = () => {
       {/* Queue Status Chart */}
       <Card>
         <CardHeader>
-          <CardTitle>Queue Status Distribution</CardTitle>
-          <CardDescription>Running vs pending jobs</CardDescription>
+          <CardTitle>Job Queue by Partition</CardTitle>
+          <CardDescription>Running and pending jobs across partitions</CardDescription>
         </CardHeader>
         <CardContent>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={queueOverview}>
-              <XAxis dataKey="status" stroke="hsl(var(--muted-foreground))" />
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={partitionJobs}>
+              <XAxis 
+                dataKey="partition" 
+                stroke="hsl(var(--muted-foreground))"
+              />
               <YAxis stroke="hsl(var(--muted-foreground))" />
-              <Tooltip 
-                contentStyle={{ 
+              <Tooltip
+                contentStyle={{
                   backgroundColor: 'hsl(var(--popover))',
                   border: '1px solid hsl(var(--border))',
-                  borderRadius: '8px'
+                  borderRadius: '8px',
+                  color: 'hsl(var(--foreground))'
                 }}
+                cursor={{ fill: 'hsl(var(--muted))' }}
               />
-              <Bar dataKey="count" radius={[8, 8, 0, 0]}>
-                {queueOverview.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} />
-                ))}
-              </Bar>
+              <Bar dataKey="running" fill="hsl(var(--primary))" name="Running" />
+              <Bar dataKey="pending" fill="hsl(var(--warning))" name="Pending" />
             </BarChart>
           </ResponsiveContainer>
         </CardContent>
       </Card>
 
-      {/* Jobs per Partition Table */}
+      {/* Job Details List */}
       <Card>
         <CardHeader>
-          <CardTitle>Jobs per Partition</CardTitle>
-          <CardDescription>Distribution of jobs across cluster partitions</CardDescription>
+          <CardTitle>Queue Details</CardTitle>
+          <CardDescription>Jobs currently in the queue</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-border">
-                  <th className="text-left py-3 px-4 font-medium">Partition</th>
-                  <th className="text-left py-3 px-4 font-medium">Running</th>
-                  <th className="text-left py-3 px-4 font-medium">Pending</th>
-                  <th className="text-left py-3 px-4 font-medium">Total</th>
-                  <th className="text-left py-3 px-4 font-medium">Utilization</th>
-                </tr>
-              </thead>
-              <tbody>
-                {partitionJobs.map((partition) => {
-                  const total = partition.running + partition.pending;
-                  const utilization = ((partition.running / total) * 100).toFixed(0);
-                  
-                  return (
-                    <tr key={partition.partition} className="border-b border-border/50 hover:bg-muted/50">
-                      <td className="py-3 px-4 font-medium">{partition.partition} Partition</td>
-                      <td className="py-3 px-4">
-                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
-                          {partition.running}
-                        </Badge>
-                      </td>
-                      <td className="py-3 px-4">
-                        <Badge variant="outline" className="bg-warning/10 text-warning border-warning/20">
-                          {partition.pending}
-                        </Badge>
-                      </td>
-                      <td className="py-3 px-4">{total}</td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                            <div 
-                              className="h-full bg-primary rounded-full transition-all"
-                              style={{ width: `${utilization}%` }}
-                            />
-                          </div>
-                          <span className="text-sm text-muted-foreground min-w-[3ch]">
-                            {utilization}%
-                          </span>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="space-y-3">
+            {[
+              { id: "12345", name: "Deep Learning Model", partition: "GPU", status: "running", priority: "High" },
+              { id: "12346", name: "Data Processing", partition: "CPU", status: "running", priority: "Medium" },
+              { id: "12347", name: "Simulation Task", partition: "GPU", status: "pending", priority: "High" },
+              { id: "12348", name: "Analysis Job", partition: "Memory", status: "pending", priority: "Low" },
+            ].map((job) => (
+              <div
+                key={job.id}
+                className="flex items-center justify-between p-3 rounded-lg border border-border bg-card hover:bg-muted/50 transition-colors"
+              >
+                <div className="flex items-center gap-4">
+                  {job.status === "running" ? (
+                    <PlayCircle className="h-4 w-4 text-primary" />
+                  ) : (
+                    <Clock className="h-4 w-4 text-warning" />
+                  )}
+                  <div>
+                    <p className="font-medium">{job.name}</p>
+                    <p className="text-sm text-muted-foreground">
+                      Job ID: {job.id} • {job.partition}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className={
+                    job.priority === "High" 
+                      ? "border-destructive/40 text-destructive"
+                      : job.priority === "Medium"
+                      ? "border-warning/40 text-warning"
+                      : "border-muted-foreground/40"
+                  }>
+                    {job.priority}
+                  </Badge>
+                  <Badge variant="outline" className={
+                    job.status === "running"
+                      ? "bg-primary/10 text-primary border-primary/20"
+                      : "bg-warning/10 text-warning border-warning/20"
+                  }>
+                    {job.status}
+                  </Badge>
+                </div>
+              </div>
+            ))}
           </div>
         </CardContent>
       </Card>

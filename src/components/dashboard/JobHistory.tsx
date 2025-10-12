@@ -50,35 +50,34 @@ const JobHistory = () => {
     <Card>
       <CardHeader>
         <CardTitle>Recent Jobs</CardTitle>
-        <CardDescription>Your recently submitted SLURM jobs</CardDescription>
+        <CardDescription>Latest job submissions and their status</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="space-y-3">
+        <div className="space-y-4">
           {mockJobs.map((job) => (
             <div
               key={job.id}
               className="flex items-center justify-between p-4 rounded-lg border border-border bg-card hover:bg-muted/50 transition-colors"
             >
-              <div className="flex items-center gap-4 flex-1">
-                <div className="flex items-center gap-2">
-                  {getStatusIcon(job.status)}
-                </div>
+              <div className="flex items-start gap-4 flex-1">
+                <div className="mt-1">{getStatusIcon(job.status)}</div>
                 <div className="flex-1">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 mb-1">
                     <h4 className="font-medium">{job.name}</h4>
                     <Badge variant="outline" className={getStatusColor(job.status)}>
                       {job.status}
                     </Badge>
                   </div>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Job ID: {job.id} • {job.nodes} nodes • Submitted {job.submitted}
-                  </p>
+                  <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                    <span>Job ID: {job.id}</span>
+                    <span>•</span>
+                    <span>{job.nodes} nodes</span>
+                    <span>•</span>
+                    <span>Runtime: {job.time}</span>
+                  </div>
                 </div>
               </div>
-              <div className="text-right">
-                <p className="text-sm font-medium">{job.time}</p>
-                <p className="text-xs text-muted-foreground">Runtime</p>
-              </div>
+              <div className="text-sm text-muted-foreground">{job.submitted}</div>
             </div>
           ))}
         </div>

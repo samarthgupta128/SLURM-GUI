@@ -13,7 +13,6 @@ interface Node {
   partition: string;
   status: "healthy" | "warning" | "error";
   cpu: number;
-  memory: number;
 }
 
 const partitions: Partition[] = [
@@ -23,18 +22,18 @@ const partitions: Partition[] = [
 ];
 
 const nodes: Node[] = [
-  { id: "node-001", partition: "GPU", status: "healthy", cpu: 45, memory: 60 },
-  { id: "node-002", partition: "GPU", status: "healthy", cpu: 78, memory: 82 },
-  { id: "node-003", partition: "GPU", status: "warning", cpu: 92, memory: 88 },
-  { id: "node-004", partition: "GPU", status: "healthy", cpu: 34, memory: 45 },
-  { id: "node-005", partition: "CPU", status: "healthy", cpu: 56, memory: 67 },
-  { id: "node-006", partition: "CPU", status: "healthy", cpu: 23, memory: 34 },
-  { id: "node-007", partition: "CPU", status: "error", cpu: 0, memory: 0 },
-  { id: "node-008", partition: "CPU", status: "healthy", cpu: 67, memory: 71 },
-  { id: "node-009", partition: "Memory", status: "healthy", cpu: 45, memory: 89 },
-  { id: "node-010", partition: "Memory", status: "warning", cpu: 88, memory: 95 },
-  { id: "node-011", partition: "Memory", status: "healthy", cpu: 34, memory: 56 },
-  { id: "node-012", partition: "Memory", status: "healthy", cpu: 56, memory: 78 },
+  { id: "node-001", partition: "GPU", status: "healthy", cpu: 45 },
+  { id: "node-002", partition: "GPU", status: "healthy", cpu: 78 },
+  { id: "node-003", partition: "GPU", status: "warning", cpu: 92 },
+  { id: "node-004", partition: "GPU", status: "healthy", cpu: 34 },
+  { id: "node-005", partition: "CPU", status: "healthy", cpu: 56 },
+  { id: "node-006", partition: "CPU", status: "healthy", cpu: 23 },
+  { id: "node-007", partition: "CPU", status: "error", cpu: 0 },
+  { id: "node-008", partition: "CPU", status: "healthy", cpu: 67 },
+  { id: "node-009", partition: "Memory", status: "healthy", cpu: 45 },
+  { id: "node-010", partition: "Memory", status: "warning", cpu: 88 },
+  { id: "node-011", partition: "Memory", status: "healthy", cpu: 34 },
+  { id: "node-012", partition: "Memory", status: "healthy", cpu: 56 },
 ];
 
 const PartitionStatus = () => {
@@ -114,7 +113,7 @@ const PartitionStatus = () => {
               const partitionNodes = nodes.filter(
                 (node) => node.partition === partition.name.split(" ")[0]
               );
-              
+
               return (
                 <div key={partition.name}>
                   <h4 className="font-medium mb-3 text-sm">{partition.name}</h4>
@@ -123,7 +122,7 @@ const PartitionStatus = () => {
                       <div
                         key={node.id}
                         className={`p-3 rounded-lg border-2 ${getNodeColor(node.status)} transition-all hover:scale-105 cursor-pointer`}
-                        title={`${node.id}\nCPU: ${node.cpu}%\nMemory: ${node.memory}%`}
+                        title={`${node.id}\nCPU: ${node.cpu}%`}
                       >
                         <div className="text-xs font-medium text-center text-white">
                           {node.id.split("-")[1]}

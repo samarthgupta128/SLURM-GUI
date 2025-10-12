@@ -17,7 +17,7 @@ const Login = () => {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!username || !password) {
       toast.error("Please enter both username and password");
       return;
@@ -26,7 +26,7 @@ const Login = () => {
     // Store role and simulate login
     localStorage.setItem("userRole", role);
     localStorage.setItem("username", username);
-    
+
     toast.success(`Welcome, ${role}!`);
     navigate("/dashboard");
   };
@@ -34,7 +34,7 @@ const Login = () => {
   return (
     <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
       {/* Background Image with Overlay */}
-      <div 
+      <div
         className="absolute inset-0 bg-cover bg-center"
         style={{ backgroundImage: `url(${heroImage})` }}
       >

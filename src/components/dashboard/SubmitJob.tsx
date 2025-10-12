@@ -17,7 +17,7 @@ const SubmitJob = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!jobData.name || !jobData.nodes || !jobData.memory || !jobData.timeLimit || !jobData.outputPath) {
       toast.error("Please fill in all fields");
       return;
@@ -51,7 +51,6 @@ const SubmitJob = () => {
               <Input
                 id="nodes"
                 type="number"
-                min="1"
                 placeholder="e.g., 4"
                 value={jobData.nodes}
                 onChange={(e) => setJobData({ ...jobData, nodes: e.target.value })}
@@ -59,11 +58,10 @@ const SubmitJob = () => {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="memory">Memory Requirement (GB)</Label>
+              <Label htmlFor="memory">Memory (GB)</Label>
               <Input
                 id="memory"
                 type="number"
-                min="1"
                 placeholder="e.g., 32"
                 value={jobData.memory}
                 onChange={(e) => setJobData({ ...jobData, memory: e.target.value })}
@@ -75,7 +73,6 @@ const SubmitJob = () => {
               <Input
                 id="timeLimit"
                 type="number"
-                min="1"
                 placeholder="e.g., 24"
                 value={jobData.timeLimit}
                 onChange={(e) => setJobData({ ...jobData, timeLimit: e.target.value })}
@@ -83,18 +80,18 @@ const SubmitJob = () => {
             </div>
 
             <div className="space-y-2 md:col-span-2">
-              <Label htmlFor="outputPath">Output File Path</Label>
+              <Label htmlFor="outputPath">Output Path</Label>
               <Input
                 id="outputPath"
-                placeholder="/home/user/output/job.out"
+                placeholder="/home/user/output"
                 value={jobData.outputPath}
                 onChange={(e) => setJobData({ ...jobData, outputPath: e.target.value })}
               />
             </div>
           </div>
 
-          <Button type="submit" className="w-full md:w-auto">
-            <Send className="h-4 w-4 mr-2" />
+          <Button type="submit" className="w-full gap-2">
+            <Send className="h-4 w-4" />
             Submit Job
           </Button>
         </form>
