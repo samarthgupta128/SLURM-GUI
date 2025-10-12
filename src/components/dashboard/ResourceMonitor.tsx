@@ -81,11 +81,21 @@ const ResourceMonitor = () => {
                   cx="50%"
                   cy="50%"
                   labelLine={false}
-                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  label={(props) => {
+                    const { cx, cy, midAngle, innerRadius, outerRadius, name, percent } = props;
+                    const RADIAN = Math.PI / 180;
+                    const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
+                    const x = cx + radius * Math.cos(-midAngle * RADIAN);
+                    const y = cy + radius * Math.sin(-midAngle * RADIAN);
+                    return (
+                      <text x={x} y={y} fill="white" textAnchor="middle" dominantBaseline="central" fontSize="14" fontWeight="500">
+                        {`${name} ${(percent * 100).toFixed(0)}%`}
+                      </text>
+                    );
+                  }}
                   outerRadius={80}
                   fill="#8884d8"
                   dataKey="value"
-                  style={{ fill: 'white', fontSize: '14px', fontWeight: '500' }}
                 >
                   {nodeData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.color} />
@@ -119,11 +129,21 @@ const ResourceMonitor = () => {
                   cx="50%"
                   cy="50%"
                   labelLine={false}
-                  label={({ name, value }) => `${name} ${value}GB`}
+                  label={(props) => {
+                    const { cx, cy, midAngle, innerRadius, outerRadius, name, value } = props;
+                    const RADIAN = Math.PI / 180;
+                    const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
+                    const x = cx + radius * Math.cos(-midAngle * RADIAN);
+                    const y = cy + radius * Math.sin(-midAngle * RADIAN);
+                    return (
+                      <text x={x} y={y} fill="white" textAnchor="middle" dominantBaseline="central" fontSize="14" fontWeight="500">
+                        {`${name} ${value}GB`}
+                      </text>
+                    );
+                  }}
                   outerRadius={80}
                   fill="#8884d8"
                   dataKey="value"
-                  style={{ fill: 'white', fontSize: '14px', fontWeight: '500' }}
                 >
                   {memoryData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.color} />
