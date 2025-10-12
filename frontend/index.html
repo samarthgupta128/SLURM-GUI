@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Slurm Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
+    <style>
+        body { padding: 2rem; }
+        #usage-container { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 2rem;}
+        .node { border: 1px solid #ccc; border-radius: 5px; padding: 1rem; width: 200px; }
+        .node.alloc { background-color: #ffdddd; }
+        .node.idle { background-color: #ddffdd; }
+        .node.mix { background-color: #ffffcc; }
+        .node h5 { margin-bottom: 0.5rem; }
+        textarea { height: 250px; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <main class="container">
+        <h1>Slurm Dashboard 🚀</h1>
+
+        <article>
+            <header>
+                <h2>Resource Usage</h2>
+                <button onclick="fetchUsage()">Refresh Usage</button>
+            </header>
+            <div id="usage-container"></div>
+        </article>
+        
+        <article>
+            <header>
+                <h2>Job Queue</h2>
+                <button onclick="fetchQueue()">Refresh Queue</button>
+            </header>
+            <figure>
+                <table id="queue-table">
+                    <thead><tr><th>Job ID</th><th>Partition</th><th>Name</th><th>User</th><th>State</th><th>Time</th><th>Nodes</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </figure>
+        </article>
+
+        <article>
+            <header><h2>Submit a Job</h2></header>
+            <form id="submission-form">
+                <label for="script-content">Submission Script</label>
+                <textarea id="script-content" name="script" placeholder="#!/bin/bash&#10;#SBATCH --job-name=my_job&#10;#SBATCH --output=my_job.out&#10;#SBATCH --nodes=1&#10;#SBATCH --ntasks=1&#10;#SBATCH --cpus-per-task=4&#10;&#10;srun hostname"></textarea>
+                <button type="submit">Submit Job</button>
+            </form>
+            <p id="submit-status"></p>
+        </article>
+    </main>
+
+    <script>
+        const API_BASE_URL = 'http://<your-server-ip>:8000'; // IMPORTANT: Change this!
+
+        // Fetch and display resource usage
+        async function fetchUsage() {
+            const container = document.getElementById('usage-container');
+            container.innerHTML = '<em>Loading...</em>';
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/usage`);
+                const data = await response.json();
+                container.innerHTML = ''; // Clear previous data
+                data.nodes.forEach(node => {
+                    const nodeDiv = document.createElement('div');
+                    nodeDiv.className = `node ${node.state.toLowerCase()}`;
+                    nodeDiv.innerHTML = `
+                        <h5>${node.name}</h5>
+                        <strong>State:</strong> ${node.state}<br>
+                        <strong>CPUs (A/I/O/T):</strong> ${node.cpus_allocated}/${node.cpus_idle}/${node.cpus_offline}/${node.cpus}<br>
+                        <strong>Memory (MB):</strong> ${node.memory_allocated}/${node.memory}
+                    `;
+                    container.appendChild(nodeDiv);
+                });
+            } catch (error) {
+                container.innerHTML = '<p style="color: red;">Failed to load resource usage.</p>';
+                console.error(error);
+            }
+        }
+
+        // Fetch and display the job queue
+        async function fetchQueue() {
+            const tbody = document.querySelector('#queue-table tbody');
+            tbody.innerHTML = '<tr><td colspan="7"><em>Loading...</em></td></tr>';
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/queue`);
+                const data = await response.json();
+                tbody.innerHTML = ''; // Clear previous data
+                if (data.jobs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7">Queue is empty.</td></tr>';
+                    return;
+                }
+                data.jobs.forEach(job => {
+                    const row = tbody.insertRow();
+                    row.innerHTML = `
+                        <td>${job.job_id}</td>
+                        <td>${job.partition}</td>
+                        <td>${job.name}</td>
+                        <td>${job.user_name}</td>
+                        <td>${job.job_state}</td>
+                        <td>${job.time_used_str}</td>
+                        <td>${job.nodes}</td>
+                    `;
+                });
+            } catch (error) {
+                tbody.innerHTML = '<tr><td colspan="7" style="color: red;">Failed to load queue.</td></tr>';
+                console.error(error);
+            }
+        }
+
+        // Handle job submission
+        document.getElementById('submission-form').addEventListener('submit', async function(event) {
+            event.preventDefault();
+            const statusElem = document.getElementById('submit-status');
+            const scriptContent = document.getElementById('script-content').value;
+            statusElem.textContent = 'Submitting...';
+
+            try {
+                const formData = new FormData();
+                formData.append('script', scriptContent);
+
+                const response = await fetch(`${API_BASE_URL}/api/submit`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail);
+                }
+
+                const result = await response.json();
+                statusElem.style.color = 'green';
+                statusElem.textContent = `${result.message} - ${result.output}`;
+                fetchQueue(); // Refresh queue after submission
+            } catch (error) {
+                statusElem.style.color = 'red';
+                statusElem.textContent = `Error: ${error.message}`;
+                console.error(error);
+            }
+        });
+
+        // Initial data load
+        fetchUsage();
+        fetchQueue();
+    </script>
+</body>
+</html>
