@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Send } from "lucide-react";
+import { api } from "@/lib/api";
 
 const SubmitJob = () => {
   const [jobData, setJobData] = useState({
@@ -15,7 +16,7 @@ const SubmitJob = () => {
     outputPath: "",
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!jobData.name || !jobData.nodes || !jobData.memory || !jobData.timeLimit || !jobData.outputPath) {
@@ -23,8 +24,28 @@ const SubmitJob = () => {
       return;
     }
 
-    toast.success(`Job "${jobData.name}" submitted successfully!`);
-    setJobData({ name: "", nodes: "", memory: "", timeLimit: "", outputPath: "" });
+    try {
+      // Show loading state
+      toast.loading('Submitting job...');
+      
+      // Submit job using our API client
+      const result = await api.submitJob(jobData);
+      
+      toast.success(`Job "${jobData.name}" submitted successfully! ${result.output}`);
+      
+      // Reset form
+      setJobData({ name: "", nodes: "", memory: "", timeLimit: "", outputPath: "" });
+
+      // Refresh the job queue and usage data
+      await Promise.all([
+        api.getQueue(),
+        api.getUsage()
+      ]);
+
+    } catch (error) {
+      console.error('Error submitting job:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to submit job');
+    }
   };
 
   return (
