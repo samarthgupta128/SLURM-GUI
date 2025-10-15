@@ -115,6 +115,8 @@ def submit_job():
     if not script:
         return jsonify({"error": "No script provided"}), 400
 
+    # Convert DOS line endings to UNIX
+    script = script.replace('\r\n', '\n')
     # write script to a temp file and call sbatch
     fd, path = tempfile.mkstemp(suffix=".sh", text=True)
     try:
