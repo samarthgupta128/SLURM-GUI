@@ -17,14 +17,55 @@ const SubmitJob = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!jobData.name || !jobData.nodes || !jobData.memory || !jobData.timeLimit || !jobData.outputPath) {
       toast.error("Please fill in all fields");
       return;
     }
 
-    toast.success(`Job "${jobData.name}" submitted successfully!`);
-    setJobData({ name: "", nodes: "", memory: "", timeLimit: "", outputPath: "" });
+    (async () => {
+      try {
+        toast.loading('Submitting job...');
+
+        // Build a minimal sbatch script using the provided fields
+        const sbatchLines = [
+          '#!/bin/bash',
+          `#SBATCH --job-name=${jobData.name}`,
+          `#SBATCH --nodes=${jobData.nodes}`,
+          `#SBATCH --mem=${jobData.memory}G`,
+          `#SBATCH --time=${jobData.timeLimit}:00:00`,
+          `#SBATCH --output=${jobData.outputPath}`,
+          '',
+          '# user commands go here',
+          'echo "Hello from job"'
+        ];
+
+        const script = sbatchLines.join('\n');
+
+        const resp = await fetch(import.meta.env.VITE_API_BASE || 'http://localhost:8000' + '/api/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ script })
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ error: 'Unknown error' }));
+          throw new Error(err.error || 'Failed to submit job');
+        }
+
+        const result = await resp.json();
+
+        toast.success(`Job "${jobData.name}" submitted successfully! ${result.output || ''}`);
+        setJobData({ name: "", nodes: "", memory: "", timeLimit: "", outputPath: "" });
+
+        // Refresh the page so the overview/queue components fetch the latest data.
+        // This is a simple approach; a better approach is to lift state or use a shared store.
+        setTimeout(() => window.location.reload(), 500);
+      } catch (error) {
+        console.error('Error submitting job:', error);
+        toast.error(error instanceof Error ? error.message : 'Failed to submit job');
+      }
+    })();
   };
 
   return (
