@@ -103,18 +103,22 @@ const SubmitJob = () => {
         {mode === "sbatch" ? (
           <form onSubmit={handleSbatchSubmit} className="space-y-6">
             <div className="space-y-2">
-              <Label htmlFor="batchFile">Batch Script File</Label>
-              <div className="flex items-center gap-4">
+              <Label htmlFor="batchFile" className="flex items-center gap-2">
+                <span className="text-xl">📁</span>
+                Batch Script File
+              </Label>
+              <div className="relative">
                 <Input
                   id="batchFile"
                   type="file"
                   accept=".sh,.slurm,.sbatch"
                   onChange={handleFileChange}
-                  className="cursor-pointer"
+                  className="cursor-pointer file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
                 />
               </div>
               {selectedFile && (
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-muted-foreground flex items-center gap-2">
+                  <span className="text-green-500">✓</span>
                   Selected: {selectedFile.name}
                 </p>
               )}
