@@ -10,8 +10,6 @@ const queueOverview = [
 
 const partitionJobs = [
   { partition: "GPU", running: 6, pending: 3 },
-  { partition: "CPU", running: 4, pending: 3 },
-  { partition: "Memory", running: 2, pending: 2 },
 ];
 
 const JobQueue = () => {
