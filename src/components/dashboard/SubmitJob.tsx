@@ -5,7 +5,6 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Send, Upload, Loader2 } from "lucide-react";
-import { Switch } from "@/components/ui/switch";
 import Terminal from "@/components/terminal/Terminal";
 
 const SubmitJob = () => {
@@ -76,17 +75,29 @@ const SubmitJob = () => {
         <CardDescription>Configure and submit a new SLURM job to the cluster</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        <div className="flex items-center justify-center gap-4 p-4 bg-muted/50 rounded-lg">
-          <span className={`text-sm font-medium ${mode === "sbatch" ? "text-primary" : "text-muted-foreground"}`}>
-            SBATCH Mode
-          </span>
-          <Switch
-            checked={mode === "alloc"}
-            onCheckedChange={(checked) => setMode(checked ? "alloc" : "sbatch")}
-          />
-          <span className={`text-sm font-medium ${mode === "alloc" ? "text-primary" : "text-muted-foreground"}`}>
-            ALLOC Mode
-          </span>
+        <div className="flex items-center justify-center gap-1 p-1 bg-muted rounded-lg max-w-md mx-auto">
+          <button
+            type="button"
+            onClick={() => setMode("sbatch")}
+            className={`flex-1 py-3 px-6 rounded-md font-medium text-sm transition-all duration-300 ${
+              mode === "sbatch"
+                ? "bg-primary text-primary-foreground shadow-lg scale-105"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            }`}
+          >
+            SBATCH
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("alloc")}
+            className={`flex-1 py-3 px-6 rounded-md font-medium text-sm transition-all duration-300 ${
+              mode === "alloc"
+                ? "bg-primary text-primary-foreground shadow-lg scale-105"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            }`}
+          >
+            SALLOC
+          </button>
         </div>
 
         {mode === "sbatch" ? (
