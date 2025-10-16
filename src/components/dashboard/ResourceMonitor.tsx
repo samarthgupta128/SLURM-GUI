@@ -140,33 +140,6 @@ const ResourceMonitor = () => {
           </CardContent>
         </Card>
 
-        {/* Partition Usage Bar Chart */}
-        <Card className="md:col-span-2">
-          <CardHeader>
-            <CardTitle>Per Partition Node Usage</CardTitle>
-            <CardDescription>Resource allocation across partitions</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={partitionData}>
-                <XAxis dataKey="partition" stroke="hsl(var(--muted-foreground))" />
-                <YAxis stroke="hsl(var(--muted-foreground))" />
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: 'hsl(var(--popover))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: '8px',
-                    color: 'hsl(var(--foreground))'
-                  }}
-                  cursor={{ fill: 'hsl(var(--muted))' }}
-                />
-                <Legend wrapperStyle={{ color: 'hsl(var(--foreground))' }} />
-                <Bar dataKey="allocated" fill="hsl(var(--primary))" name="Allocated" />
-                <Bar dataKey="idle" fill="hsl(var(--muted))" name="Idle" />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
       </div>
     </div>
   );
