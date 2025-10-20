@@ -62,14 +62,46 @@ const SubmitJob = () => {
     }
 
     setLoading(true);
-    
-    // Simulate allocation process
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    setLoading(false);
-    setShowTerminal(true);
-    toast.success("Resources allocated successfully!");
-    setJobData({ name: "", nodes: "", memory: "", timeLimit: "" });
+    try {
+      const response = await fetch('http://localhost:8000/api/submit/salloc', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          username: 'testuser', // TODO: Replace with actual username
+          nodes: parseInt(jobData.nodes),
+          memory: parseInt(jobData.memory),
+          time: parseInt(jobData.timeLimit),
+          jobName: jobData.name
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to allocate resources');
+      }
+
+      const data = await response.json();
+      
+      if (data.session_id) {
+        console.log('Received session ID:', data.session_id);
+        toast.success("Resources allocated successfully!");
+        // Store the session ID for the terminal component to use
+        localStorage.setItem('currentTerminalSession', data.session_id);
+        console.log('Stored session ID in localStorage');
+        setShowTerminal(true);
+        setJobData({ name: "", nodes: "", memory: "", timeLimit: "" });
+      } else {
+        console.error('No session_id in response:', data);
+        throw new Error('No session ID returned from server');
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to allocate resources');
+      setShowTerminal(false);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
