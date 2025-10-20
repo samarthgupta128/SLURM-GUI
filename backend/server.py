@@ -319,6 +319,27 @@ def disconnect():
     print("Client disconnected")
     # Cleanup any associated terminal session
 
+
+@socketio.on('terminal_connect')
+def handle_terminal_connect(data):
+    """Associate a Socket.IO connection with a terminal session_id and start output reader."""
+    session_id = data.get('session_id')
+    if not session_id:
+        emit('terminal_error', {'error': 'No session_id provided'})
+        return
+
+    # Store mapping from session_id to Socket.IO sid
+    sid = request.sid
+    app.session_sids[session_id] = sid
+    print(f"Terminal connect: session {session_id} -> sid {sid}")
+
+    # Start a background reader to emit terminal output to this client
+    import threading
+    reader_thread = threading.Thread(target=read_terminal_output, args=(session_id,), daemon=True)
+    reader_thread.start()
+
+    emit('terminal_connected', {'session_id': session_id})
+
 @socketio.on('terminal_input')
 def handle_terminal_input(data):
     """Handle input from the frontend terminal"""
@@ -330,13 +351,22 @@ def handle_terminal_input(data):
         
     session = app.terminal_sessions.get(session_id)
     if not session:
-        emit('terminal_error', {'error': 'Session not found'})
+        # try to emit to the requesting client if sid provided
+        sid = request.sid
+        if sid:
+            socketio.emit('terminal_error', {'error': 'Session not found'}, to=sid)
+        else:
+            emit('terminal_error', {'error': 'Session not found'})
         return
         
     try:
         os.write(session['fd'], input_data.encode())
     except Exception as e:
-        emit('terminal_error', {'error': str(e)})
+        sid = request.sid
+        if sid:
+            socketio.emit('terminal_error', {'error': str(e)}, to=sid)
+        else:
+            emit('terminal_error', {'error': str(e)})
 
 def read_terminal_output(session_id):
     """Read and emit terminal output"""
@@ -344,21 +374,28 @@ def read_terminal_output(session_id):
     if not session:
         return
         
+    # emit only to the connected websocket client for this session, if known
+    sid = app.session_sids.get(session_id)
     while True:
         r, _, _ = select.select([session['fd']], [], [], 0.1)
         if session['fd'] in r:
             try:
                 data = os.read(session['fd'], 1024)
                 if data:
-                    socketio.emit('terminal_output', {
+                    payload = {
                         'session_id': session_id,
                         'output': data.decode()
-                    })
+                    }
+                    if sid:
+                        socketio.emit('terminal_output', payload, to=sid)
+                    else:
+                        socketio.emit('terminal_output', payload)
             except Exception:
                 break
 
 # Initialize terminal sessions storage
 app.terminal_sessions = {}
+app.session_sids = {}
 
 if __name__ == '__main__':
     try:

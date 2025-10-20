@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { io, Socket } from "socket.io-client";
 import { Card } from "@/components/ui/card";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,15 +9,61 @@ interface TerminalProps {
 }
 
 const Terminal = ({ onClose }: TerminalProps) => {
-  const [output, setOutput] = useState<string[]>([
-    "Connecting to SLURM cluster...",
-    "Resources allocated successfully",
-    "Starting interactive session...",
-    ""
-  ]);
+  const [output, setOutput] = useState<string[]>(["Connecting to SLURM cluster..."]);
   const [input, setInput] = useState("");
   const outputRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const socketRef = useRef<Socket | null>(null);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    const sessionId = localStorage.getItem('currentTerminalSession');
+    if (!sessionId) {
+      setOutput(prev => [...prev, "Error: No session ID found"]);
+      return;
+    }
+
+    console.log('Attempting to connect to socket.io with session:', sessionId);
+    const socket = io('http://localhost:8000', {
+      transports: ['websocket'],
+      reconnectionAttempts: 3,
+      timeout: 20000,
+    });
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      console.log('socket.io connected', socket.id);
+      setConnected(true);
+      socket.emit('terminal_connect', { session_id: sessionId });
+      setOutput(prev => [...prev, 'Connected to terminal session']);
+    });
+
+    socket.on('terminal_connected', (d: any) => {
+      console.log('terminal_connected', d);
+    });
+
+    socket.on('terminal_output', (d: any) => {
+      if (d && d.output) setOutput(prev => [...prev, d.output]);
+    });
+
+    socket.on('terminal_error', (d: any) => {
+      if (d && d.error) setOutput(prev => [...prev, `Error: ${d.error}`]);
+    });
+
+    socket.on('disconnect', () => {
+      setConnected(false);
+      setOutput(prev => [...prev, 'Disconnected from terminal session']);
+    });
+
+    socket.on('connect_error', (err: any) => {
+      console.error('socket connect_error', err);
+      setOutput(prev => [...prev, 'Error: Failed to connect to terminal']);
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     if (outputRef.current) {
@@ -27,22 +74,26 @@ const Terminal = ({ onClose }: TerminalProps) => {
 
   const handleCommand = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && input.trim()) {
-      const newOutput = [...output, `$ ${input}`];
+      if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+        setOutput(prev => [...prev, "Error: Not connected to terminal"]);
+        return;
+      }
+
+      setOutput(prev => [...prev, `$ ${input}`]);
       
-      // Simulate command responses
       if (input.toLowerCase() === "exit") {
+        socketRef.current.close();
         onClose();
         return;
-      } else if (input.toLowerCase() === "ls") {
-        newOutput.push("file1.txt  file2.txt  script.sh");
-      } else if (input.toLowerCase().startsWith("echo ")) {
-        newOutput.push(input.substring(5));
-      } else {
-        newOutput.push(`bash: ${input}: command not found`);
       }
+
+      // Send command to server
+      socketRef.current.send(JSON.stringify({
+        type: 'terminal_input',
+        input: input + '\n',
+        session_id: localStorage.getItem('currentTerminalSession')
+      }));
       
-      newOutput.push("");
-      setOutput(newOutput);
       setInput("");
     }
   };
