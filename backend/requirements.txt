@@ -1,2 +1,6 @@
 flask
 flask-cors
+flask-socketio
+python-engineio
+python-socketio
+eventlet

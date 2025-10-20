@@ -19,7 +19,7 @@ const SubmitJob = () => {
     timeLimit: "",
   });
 
-  const handleSbatchSubmit = (e: React.FormEvent) => {
+  const handleSbatchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!selectedFile) {
@@ -27,8 +27,30 @@ const SubmitJob = () => {
       return;
     }
 
-    toast.success(`Batch job submitted: ${selectedFile.name}`);
-    setSelectedFile(null);
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('username', 'testuser'); // TODO: Replace with actual username
+      formData.append('file', selectedFile);
+
+      const response = await fetch('http://localhost:8000/api/submit/sbatch', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to submit job');
+      }
+
+      const data = await response.json();
+      toast.success(`Job submitted successfully! Job ID: ${data.job_id}`);
+      setSelectedFile(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to submit job');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleAllocSubmit = async (e: React.FormEvent) => {
@@ -120,9 +142,18 @@ const SubmitJob = () => {
               )}
             </div>
 
-            <Button type="submit" className="w-full md:w-auto">
-              <Upload className="h-4 w-4 mr-2" />
-              Submit Batch Job
+            <Button type="submit" className="w-full md:w-auto" disabled={loading}>
+              {loading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Submitting Job...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Submit Batch Job
+                </>
+              )}
             </Button>
           </form>
         ) : (
