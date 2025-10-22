@@ -40,8 +40,8 @@ def run_command(cmd, shell=False):
         return str(e)
 
 def create_terminal_session(resource_params):
-    """Create a new terminal session with salloc"""
-    # Build salloc command from parameters
+    """Create a new terminal session with salloc + srun for older SLURM versions"""
+    # First, build salloc command from parameters
     salloc_cmd = ["salloc"]
     if resource_params.get("nodes"):
         salloc_cmd.extend(["--nodes", str(resource_params["nodes"])])
@@ -49,25 +49,48 @@ def create_terminal_session(resource_params):
         salloc_cmd.extend(["--mem", f"{resource_params['memory']}G"])
     if resource_params.get("time"):
         salloc_cmd.extend(["--time", f"{resource_params['time']}:00:00"])
-    
-    # Add interactive shell
-    salloc_cmd.extend(["--pty", "/bin/bash"])
-    
-    # Create pseudo-terminal
+
+    # Create pseudo-terminal for the srun command that will follow
     master_fd, slave_fd = pty.openpty()
-    
-    # Start salloc process
-    process = subprocess.Popen(
+
+    # Start salloc process first to get the allocation
+    salloc_process = subprocess.Popen(
         salloc_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True
+    )
+
+    # Wait for salloc to complete and get the job ID
+    stdout, stderr = salloc_process.communicate()
+    if salloc_process.returncode != 0:
+        os.close(master_fd)
+        os.close(slave_fd)
+        raise Exception(f"salloc failed: {stderr}")
+
+    # Parse the job ID from salloc output
+    import re
+    job_id_match = re.search(r"Granted job allocation (\d+)", stdout)
+    if not job_id_match:
+        os.close(master_fd)
+        os.close(slave_fd)
+        raise Exception("Could not find job ID in salloc output")
+
+    job_id = job_id_match.group(1)
+
+    # Now start an interactive shell using srun
+    srun_cmd = ["srun", "--jobid", job_id, "/bin/bash"]
+    process = subprocess.Popen(
+        srun_cmd,
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,
         preexec_fn=os.setsid
     )
-    
+
     # Close slave fd, we'll use master to communicate
     os.close(slave_fd)
-    
+
     return master_fd, process
 
 
