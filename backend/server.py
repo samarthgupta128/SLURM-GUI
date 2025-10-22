@@ -41,8 +41,10 @@ def run_command(cmd, shell=False):
 
 def create_terminal_session(resource_params):
     """Create a new terminal session with salloc + srun for older SLURM versions"""
-    # First, build salloc command from parameters
-    salloc_cmd = ["salloc"]
+    print(f"Creating terminal session with params: {resource_params}")
+    
+    # First, build salloc command with --immediate flag to avoid waiting
+    salloc_cmd = ["salloc", "--immediate"]
     if resource_params.get("nodes"):
         salloc_cmd.extend(["--nodes", str(resource_params["nodes"])])
     if resource_params.get("memory"):
@@ -50,48 +52,70 @@ def create_terminal_session(resource_params):
     if resource_params.get("time"):
         salloc_cmd.extend(["--time", f"{resource_params['time']}:00:00"])
 
+    print(f"Running salloc command: {' '.join(salloc_cmd)}")
+
     # Create pseudo-terminal for the srun command that will follow
     master_fd, slave_fd = pty.openpty()
 
-    # Start salloc process first to get the allocation
-    salloc_process = subprocess.Popen(
-        salloc_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True
-    )
+    try:
+        # Start salloc process first to get the allocation
+        salloc_process = subprocess.Popen(
+            salloc_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True
+        )
 
-    # Wait for salloc to complete and get the job ID
-    stdout, stderr = salloc_process.communicate()
-    if salloc_process.returncode != 0:
+        print("Waiting for salloc allocation...")
+        stdout, stderr = salloc_process.communicate(timeout=10)  # Add 10 second timeout
+        print(f"salloc stdout: {stdout}")
+        print(f"salloc stderr: {stderr}")
+        
+        if salloc_process.returncode != 0:
+            raise Exception(f"salloc failed: {stderr}")
+
+        # Parse the job ID from salloc output
+        import re
+        job_id_match = re.search(r"Granted job allocation (\d+)", stdout)
+        if not job_id_match:
+            raise Exception(f"Could not find job ID in salloc output. Output was: {stdout}")
+
+        job_id = job_id_match.group(1)
+        print(f"Got job ID: {job_id}")
+
+        # Now start an interactive shell using srun
+        srun_cmd = ["srun", "--jobid", job_id, "/bin/bash"]
+        print(f"Starting srun with command: {' '.join(srun_cmd)}")
+        
+        process = subprocess.Popen(
+            srun_cmd,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            preexec_fn=os.setsid
+        )
+
+        # Close slave fd, we'll use master to communicate
+        os.close(slave_fd)
+        print("Interactive shell started successfully")
+        
+        return master_fd, process
+
+    except subprocess.TimeoutExpired:
+        print("salloc timed out after 10 seconds")
+        if 'salloc_process' in locals():
+            salloc_process.terminate()
         os.close(master_fd)
         os.close(slave_fd)
-        raise Exception(f"salloc failed: {stderr}")
-
-    # Parse the job ID from salloc output
-    import re
-    job_id_match = re.search(r"Granted job allocation (\d+)", stdout)
-    if not job_id_match:
+        raise Exception("Resource allocation timed out. No resources may be immediately available.")
+        
+    except Exception as e:
+        print(f"Error in create_terminal_session: {str(e)}")
+        if 'salloc_process' in locals():
+            salloc_process.terminate()
         os.close(master_fd)
         os.close(slave_fd)
-        raise Exception("Could not find job ID in salloc output")
-
-    job_id = job_id_match.group(1)
-
-    # Now start an interactive shell using srun
-    srun_cmd = ["srun", "--jobid", job_id, "/bin/bash"]
-    process = subprocess.Popen(
-        srun_cmd,
-        stdin=slave_fd,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        preexec_fn=os.setsid
-    )
-
-    # Close slave fd, we'll use master to communicate
-    os.close(slave_fd)
-
-    return master_fd, process
+        raise
 
 
 @app.route("/api/queue", methods=["GET"])
