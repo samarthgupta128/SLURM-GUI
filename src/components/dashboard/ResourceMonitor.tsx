@@ -41,13 +41,34 @@ const ResourceMonitor = () => {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const response = await fetch('/api/resources');
-        if (!response.ok) {
-          throw new Error('Failed to fetch cluster stats');
+        setLoading(true);
+        const response = await fetch('http://localhost:8000/api/resources', {
+          headers: {
+            'Accept': 'application/json',
+          }
+        });
+        
+        const text = await response.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (parseError) {
+          console.error('Failed to parse response:', text);
+          throw new Error('Invalid response format from server');
         }
-        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to fetch cluster stats');
+        }
+
+        if (data.error) {
+          console.warn('Server reported error:', data.error);
+        }
+
         setStats(data);
+        setError(null);
       } catch (err) {
+        console.error('Resource fetch error:', err);
         setError(err instanceof Error ? err.message : 'Failed to load resources');
       } finally {
         setLoading(false);

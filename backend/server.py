@@ -11,8 +11,14 @@ import struct
 import fcntl
 
 app = Flask(__name__)
-CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*")
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["http://localhost:5173", "http://localhost:8000"],
+        "methods": ["GET", "POST", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "Accept"]
+    }
+})
+socketio = SocketIO(app, cors_allowed_origins=["http://localhost:5173", "http://localhost:8000"])
 
 
 def run_command(cmd, shell=False):
@@ -205,24 +211,56 @@ def parse_memory_value(memory_str):
 @app.route("/api/resources", methods=["GET"])
 def get_resources():
     """Get comprehensive cluster resource information"""
+    try:
+        # Check if sinfo is available
+        sinfo_check = run_command(["which", "sinfo"])
+        if not sinfo_check:
+            return jsonify({
+                "error": "SLURM commands not available",
+                "total_nodes": 0,
+                "allocated_nodes": 0,
+                "total_cpus": 0,
+                "allocated_cpus": 0,
+                "total_memory": 0,
+                "allocated_memory": 0,
+                "partitions": [],
+                "nodes": [],
+                "gpu_nodes": {}
+            })
     
-    # Get node information with detailed CPU, memory, and state
-    node_output = run_command([
-        "sinfo", 
-        "-N", 
-        "-o", 
-        "%N|%t|%C|%m|%e|%P"
-    ])  # name|state|CPUs|memory|free_mem|partition
-    
-    nodes = []
-    total_cpus = total_allocated_cpus = 0
-    total_memory = total_allocated_memory = 0
-    partitions = {}
-    
-    if node_output:
-        lines = node_output.strip().split("\n")
+        # Get node information with detailed CPU, memory, and state
+        node_output = run_command([
+            "sinfo", 
+            "-N", 
+            "-o", 
+            "%N|%t|%C|%m|%e|%P"
+        ])  # name|state|CPUs|memory|free_mem|partition
+        
+        if not node_output or "error" in node_output.lower():
+            raise Exception(f"Failed to get node information: {node_output}")
+        
+        nodes = []
+        total_cpus = total_allocated_cpus = 0
+        total_memory = total_allocated_memory = 0
+        partitions = {}
+        
+        lines = [line for line in node_output.strip().split("\n") if line.strip()]
         if len(lines) > 1:  # Skip header
             lines = lines[1:]
+    except Exception as e:
+        print(f"Error in get_resources: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "total_nodes": 0,
+            "allocated_nodes": 0,
+            "total_cpus": 0,
+            "allocated_cpus": 0,
+            "total_memory": 0,
+            "allocated_memory": 0,
+            "partitions": [],
+            "nodes": [],
+            "gpu_nodes": {}
+        }), 500
             
         for line in lines:
             parts = line.split("|")
