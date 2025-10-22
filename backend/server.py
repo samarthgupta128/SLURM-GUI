@@ -63,13 +63,13 @@ def create_terminal_session(resource_params):
     master_fd, slave_fd = pty.openpty()
 
     try:
-        # Set terminal size
+        # Set terminal size on the slave PTY (master_fd is for reading/writing)
         rows, cols = 24, 80  # Default size
         winsize = struct.pack('HHHH', rows, cols, 0, 0)
-        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
-        
-        # Make the slave PTY our controlling terminal
-        fcntl.fcntl(slave_fd, fcntl.F_SETFD, 0)
+        try:
+            fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+        except Exception as ex:
+            print(f"Warning: could not set window size on slave PTY: {ex}")
         
         # Start salloc process with PTY
         process = subprocess.Popen(
@@ -381,6 +381,7 @@ def submit_salloc():
             "fd": master_fd,
             "process": process
         }
+        print(f"Session created: {session_id}, fd={master_fd}, pid={process.pid}")
         
         return jsonify({
             "message": "Session created",
@@ -449,6 +450,7 @@ def handle_terminal_input(data):
         return
         
     try:
+        print(f"Received terminal input for session {session_id}: {repr(input_data)}")
         os.write(session['fd'], input_data.encode())
     except Exception as e:
         sid = request.sid
@@ -465,22 +467,49 @@ def read_terminal_output(session_id):
         
     # emit only to the connected websocket client for this session, if known
     sid = app.session_sids.get(session_id)
+    proc = session.get('process')
     while True:
-        r, _, _ = select.select([session['fd']], [], [], 0.1)
-        if session['fd'] in r:
-            try:
-                data = os.read(session['fd'], 1024)
-                if data:
-                    payload = {
-                        'session_id': session_id,
-                        'output': data.decode()
-                    }
-                    if sid:
-                        socketio.emit('terminal_output', payload, to=sid)
-                    else:
-                        socketio.emit('terminal_output', payload)
-            except Exception:
+        # If the process has exited, notify client and stop
+        try:
+            if proc and proc.poll() is not None:
+                exit_code = proc.returncode
+                print(f"Process for session {session_id} exited with code {exit_code}")
+                if sid:
+                    socketio.emit('terminal_error', {'error': 'Terminal process exited'}, to=sid)
+                else:
+                    socketio.emit('terminal_error', {'error': 'Terminal process exited'})
                 break
+
+            r, _, _ = select.select([session['fd']], [], [], 0.1)
+            if session['fd'] in r:
+                try:
+                    data = os.read(session['fd'], 4096)
+                except OSError as e:
+                    print(f"OS read error for session {session_id}: {e}")
+                    break
+
+                if not data:
+                    # No data; loop again and check process
+                    continue
+
+                try:
+                    text = data.decode(errors='replace')
+                except Exception as e:
+                    print(f"Decode error for session {session_id}: {e}")
+                    text = repr(data)
+
+                payload = {
+                    'session_id': session_id,
+                    'output': text
+                }
+                print(f"Emitting terminal output for session {session_id}: {repr(payload['output'])}")
+                if sid:
+                    socketio.emit('terminal_output', payload, to=sid)
+                else:
+                    socketio.emit('terminal_output', payload)
+        except Exception as e:
+            print(f"Unexpected error in read_terminal_output for {session_id}: {e}")
+            break
 
 # Initialize terminal sessions storage
 app.terminal_sessions = {}
