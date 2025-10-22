@@ -287,33 +287,167 @@ def get_sample_resources():
         }
     })
 
+def get_partition_info():
+    """Get detailed partition information using scontrol"""
+    output = run_command(["scontrol", "show", "partition", "-o"])
+    partitions = []
+    
+    if output:
+        for line in output.strip().split('\n'):
+            parts = dict(item.split('=', 1) for item in line.split() if '=' in item)
+            partition = {
+                'name': parts.get('PartitionName', 'unknown'),
+                'nodes': parts.get('Nodes', ''),
+                'state': parts.get('State', 'unknown'),
+                'max_time': parts.get('MaxTime', 'infinite'),
+                'default': parts.get('Default', 'NO') == 'YES',
+                'total_nodes': int(parts.get('TotalNodes', '0')),
+                'available_nodes': int(parts.get('AvailableNodes', '0')),
+                'allocated_nodes': 0,  # Will be calculated from node info
+                'total_cpus': 0,      # Will be calculated from node info
+                'allocated_cpus': 0,   # Will be calculated from node info
+                'total_memory': 0,     # Will be calculated from node info
+                'allocated_memory': 0   # Will be calculated from node info
+            }
+            partitions.append(partition)
+    return partitions
+
+def get_node_info():
+    """Get detailed node information using scontrol"""
+    output = run_command(["scontrol", "show", "node", "-o"])
+    nodes = []
+    
+    if output:
+        for line in output.strip().split('\n'):
+            parts = dict(item.split('=', 1) for item in line.split() if '=' in item)
+            
+            # Parse CPU information
+            cpus_total = int(parts.get('CPUTot', '0'))
+            cpus_allocated = int(parts.get('CPUAlloc', '0'))
+            
+            # Parse memory information (convert to GB)
+            memory_total = int(parts.get('RealMemory', '0')) // 1024  # Convert MB to GB
+            memory_allocated = int(parts.get('AllocMem', '0')) // 1024
+            
+            # Parse GPU information if available
+            gres = parts.get('Gres', '')
+            gpus = None
+            if 'gpu:' in gres.lower():
+                gpu_info = [g for g in gres.split(',') if 'gpu' in g.lower()]
+                if gpu_info:
+                    gpus = gpu_info[0]
+            
+            node = {
+                'name': parts.get('NodeName', 'unknown'),
+                'state': parts.get('State', 'unknown'),
+                'partition': parts.get('Partitions', 'unknown'),
+                'cpus_total': cpus_total,
+                'cpus_allocated': cpus_allocated,
+                'cpus_idle': cpus_total - cpus_allocated,
+                'memory_total': memory_total,
+                'memory_allocated': memory_allocated,
+                'memory_free': memory_total - memory_allocated,
+                'gpus': gpus,
+                'features': parts.get('AvailableFeatures', ''),
+                'active_features': parts.get('ActiveFeatures', ''),
+                'load': parts.get('CPULoad', '0.00')
+            }
+            nodes.append(node)
+    return nodes
+
 @app.route("/api/resources", methods=["GET"])
 def get_resources():
     """Get comprehensive cluster resource information"""
     try:
-        debug_info = {}  # Store command outputs for debugging
+        # Check if SLURM commands are available
+        for cmd in ['sinfo', 'scontrol']:
+            if not run_command(['which', cmd]):
+                return jsonify({
+                    "error": f"SLURM command '{cmd}' not found in PATH. Please ensure SLURM client tools are installed.",
+                    "total_nodes": 0,
+                    "allocated_nodes": 0,
+                    "total_cpus": 0,
+                    "allocated_cpus": 0,
+                    "total_memory": 0,
+                    "allocated_memory": 0,
+                    "partitions": [],
+                    "nodes": [],
+                    "gpu_nodes": {}
+                })
+
+        # Get partition and node information
+        partitions = get_partition_info()
+        nodes = get_node_info()
         
-        # Check if sinfo is available
-        sinfo_check = run_command(["which", "sinfo"])
-        if not sinfo_check:
-            print("SLURM sinfo command not found in PATH")
-            debug_info["error"] = "sinfo not found in PATH"
-            debug_info["path"] = os.environ.get("PATH", "")
-            return jsonify({
-                "error": "SLURM commands not available",
-                "debug": debug_info,
-                "total_nodes": 0,
-                "allocated_nodes": 0,
-                "total_cpus": 0,
-                "allocated_cpus": 0,
-                "total_memory": 0,
-                "allocated_memory": 0,
-                "partitions": [],
-                "nodes": [],
-                "gpu_nodes": {}
-            })
-    
-        # Get node information with detailed CPU, memory, and state
+        # Initialize totals
+        total_cpus = total_allocated_cpus = 0
+        total_memory = total_allocated_memory = 0
+        gpu_nodes = {}
+        
+        # Create partition lookup for faster processing
+        partition_lookup = {p['name']: p for p in partitions}
+        
+        # Process node information and update partition stats
+        for node in nodes:
+            # Update global totals
+            total_cpus += node['cpus_total']
+            total_allocated_cpus += node['cpus_allocated']
+            total_memory += node['memory_total']
+            total_allocated_memory += node['memory_allocated']
+            
+            # Track GPU nodes
+            if node['gpus']:
+                gpu_nodes[node['name']] = node['gpus']
+            
+            # Update partition statistics
+            for partition_name in node['partition'].split(','):
+                if partition_name in partition_lookup:
+                    p = partition_lookup[partition_name]
+                    p['allocated_nodes'] += 1 if node['cpus_allocated'] > 0 else 0
+                    p['total_cpus'] += node['cpus_total']
+                    p['allocated_cpus'] += node['cpus_allocated']
+                    p['total_memory'] += node['memory_total']
+                    p['allocated_memory'] += node['memory_allocated']
+        
+        # Return comprehensive cluster information
+        return jsonify({
+            "total_nodes": len(nodes),
+            "allocated_nodes": sum(1 for n in nodes if n['cpus_allocated'] > 0),
+            "total_cpus": total_cpus,
+            "allocated_cpus": total_allocated_cpus,
+            "total_memory": total_memory,
+            "allocated_memory": total_allocated_memory,
+            "partitions": [p for p in partitions if p['total_nodes'] > 0],  # Only return active partitions
+            "nodes": nodes,
+            "gpu_nodes": gpu_nodes,
+            "cluster_load": sum(float(n['load']) for n in nodes) / len(nodes) if nodes else 0.0
+        })
+    except Exception as e:
+        print(f"Error in get_resources: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "total_nodes": 0,
+            "allocated_nodes": 0,
+            "total_cpus": 0,
+            "allocated_cpus": 0,
+            "total_memory": 0,
+            "allocated_memory": 0,
+            "partitions": [],
+            "nodes": [],
+            "gpu_nodes": {}
+        }), 500        # Return comprehensive cluster information
+        return jsonify({
+            "total_nodes": len(nodes),
+            "allocated_nodes": sum(1 for n in nodes if n['cpus_allocated'] > 0),
+            "total_cpus": total_cpus,
+            "allocated_cpus": total_allocated_cpus,
+            "total_memory": total_memory,
+            "allocated_memory": total_allocated_memory,
+            "partitions": [p for p in partitions if p['total_nodes'] > 0],  # Only return active partitions
+            "nodes": nodes,
+            "gpu_nodes": gpu_nodes,
+            "cluster_load": sum(float(n['load']) for n in nodes) / len(nodes) if nodes else 0.0
+        })        # Get node information with detailed CPU, memory, and state
         node_output = run_command([
             "sinfo",
             "-N",
@@ -327,10 +461,39 @@ def get_resources():
         if not node_output or "error" in node_output.lower():
             raise Exception(f"Failed to get node information: {node_output}")
 
-        nodes = []
+        # Get partition and node information
+        partitions = get_partition_info()
+        nodes = get_node_info()
+        
+        # Initialize totals
         total_cpus = total_allocated_cpus = 0
         total_memory = total_allocated_memory = 0
-        partitions = {}
+        gpu_nodes = {}
+        
+        # Create partition lookup for faster processing
+        partition_lookup = {p['name']: p for p in partitions}
+        
+        # Process node information and update partition stats
+        for node in nodes:
+            # Update global totals
+            total_cpus += node['cpus_total']
+            total_allocated_cpus += node['cpus_allocated']
+            total_memory += node['memory_total']
+            total_allocated_memory += node['memory_allocated']
+            
+            # Track GPU nodes
+            if node['gpus']:
+                gpu_nodes[node['name']] = node['gpus']
+            
+            # Update partition statistics
+            for partition_name in node['partition'].split(','):
+                if partition_name in partition_lookup:
+                    p = partition_lookup[partition_name]
+                    p['allocated_nodes'] += 1 if node['cpus_allocated'] > 0 else 0
+                    p['total_cpus'] += node['cpus_total']
+                    p['allocated_cpus'] += node['cpus_allocated']
+                    p['total_memory'] += node['memory_total']
+                    p['allocated_memory'] += node['memory_allocated']
 
         lines = [line for line in node_output.strip().split("\n") if line.strip()]
         if len(lines) > 1:  # Skip header
@@ -350,65 +513,65 @@ def get_resources():
             "gpu_nodes": {}
         }), 500
             
-        for line in lines:
-            parts = line.split("|")
-            if len(parts) < 6:
-                continue
-                
-            name, state, cpu_field, total_mem, free_mem, partition = [p.strip() for p in parts]
+    for line in lines:
+        parts = line.split("|")
+        if len(parts) < 6:
+            continue
             
-            # Parse CPU information (format: allocated/idle/other/total)
-            cpu_parts = cpu_field.split("/")
-            if len(cpu_parts) == 4:
-                cpus_allocated = int(cpu_parts[0])
-                cpus_idle = int(cpu_parts[1])
-                cpus_total = int(cpu_parts[3])
-            else:
-                cpus_allocated = cpus_idle = cpus_total = 0
-                
-            # Parse memory values
-            total_mem_gb = parse_memory_value(total_mem)
-            free_mem_gb = parse_memory_value(free_mem)
-            used_mem_gb = total_mem_gb - free_mem_gb
+        name, state, cpu_field, total_mem, free_mem, partition = [p.strip() for p in parts]
+        
+        # Parse CPU information (format: allocated/idle/other/total)
+        cpu_parts = cpu_field.split("/")
+        if len(cpu_parts) == 4:
+            cpus_allocated = int(cpu_parts[0])
+            cpus_idle = int(cpu_parts[1])
+            cpus_total = int(cpu_parts[3])
+        else:
+            cpus_allocated = cpus_idle = cpus_total = 0
             
-            # Update totals
-            total_cpus += cpus_total
-            total_allocated_cpus += cpus_allocated
-            total_memory += total_mem_gb
-            total_allocated_memory += used_mem_gb
-            
-            # Track partition statistics
-            if partition not in partitions:
-                partitions[partition] = {
-                    "name": partition,
-                    "total_nodes": 0,
-                    "allocated_nodes": 0,
-                    "total_cpus": 0,
-                    "allocated_cpus": 0,
-                    "total_memory": 0,
-                    "allocated_memory": 0
-                }
-            
-            p_stats = partitions[partition]
-            p_stats["total_nodes"] += 1
-            if state.startswith(("alloc", "mix")):
-                p_stats["allocated_nodes"] += 1
-            p_stats["total_cpus"] += cpus_total
-            p_stats["allocated_cpus"] += cpus_allocated
-            p_stats["total_memory"] += total_mem_gb
-            p_stats["allocated_memory"] += used_mem_gb
-            
-            nodes.append({
-                "name": name,
-                "state": state,
-                "partition": partition,
-                "cpus_allocated": cpus_allocated,
-                "cpus_idle": cpus_idle,
-                "cpus_total": cpus_total,
-                "memory_total": total_mem_gb,
-                "memory_free": free_mem_gb,
-                "memory_used": used_mem_gb
-            })
+        # Parse memory values
+        total_mem_gb = parse_memory_value(total_mem)
+        free_mem_gb = parse_memory_value(free_mem)
+        used_mem_gb = total_mem_gb - free_mem_gb
+        
+        # Update totals
+        total_cpus += cpus_total
+        total_allocated_cpus += cpus_allocated
+        total_memory += total_mem_gb
+        total_allocated_memory += used_mem_gb
+        
+        # Track partition statistics
+        if partition not in partitions:
+            partitions[partition] = {
+                "name": partition,
+                "total_nodes": 0,
+                "allocated_nodes": 0,
+                "total_cpus": 0,
+                "allocated_cpus": 0,
+                "total_memory": 0,
+                "allocated_memory": 0
+            }
+        
+        p_stats = partitions[partition]
+        p_stats["total_nodes"] += 1
+        if state.startswith(("alloc", "mix")):
+            p_stats["allocated_nodes"] += 1
+        p_stats["total_cpus"] += cpus_total
+        p_stats["allocated_cpus"] += cpus_allocated
+        p_stats["total_memory"] += total_mem_gb
+        p_stats["allocated_memory"] += used_mem_gb
+        
+        nodes.append({
+            "name": name,
+            "state": state,
+            "partition": partition,
+            "cpus_allocated": cpus_allocated,
+            "cpus_idle": cpus_idle,
+            "cpus_total": cpus_total,
+            "memory_total": total_mem_gb,
+            "memory_free": free_mem_gb,
+            "memory_used": used_mem_gb
+        })
     
     # Get GPU information if available
     gpu_nodes = {}
