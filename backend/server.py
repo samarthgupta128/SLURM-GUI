@@ -181,56 +181,141 @@ def get_queue():
     return jsonify({"jobs": jobs})
 
 
-@app.route("/api/usage", methods=["GET"])
-def get_usage():
-    # Try to get node-level usage using sinfo. The format below attempts to return
-    # a small set of fields the frontend expects. This will vary per-cluster.
-    output = run_command(["sinfo", "-N", "-o", "%N|%t|%C|%m"])  # name|state|CPUs(alloc/idle/other/total)|memory
+def parse_memory_value(memory_str):
+    """Convert memory string (e.g., '16G', '1024M') to GB value"""
+    try:
+        if not memory_str:
+            return 0
+        
+        memory_str = memory_str.strip().upper()
+        value = float(''.join(filter(lambda x: x.isdigit() or x == '.', memory_str)))
+        
+        if 'T' in memory_str:
+            return value * 1024
+        elif 'G' in memory_str:
+            return value
+        elif 'M' in memory_str:
+            return value / 1024
+        elif 'K' in memory_str:
+            return value / (1024 * 1024)
+        return value
+    except Exception:
+        return 0
+
+@app.route("/api/resources", methods=["GET"])
+def get_resources():
+    """Get comprehensive cluster resource information"""
+    
+    # Get node information with detailed CPU, memory, and state
+    node_output = run_command([
+        "sinfo", 
+        "-N", 
+        "-o", 
+        "%N|%t|%C|%m|%e|%P"
+    ])  # name|state|CPUs|memory|free_mem|partition
+    
     nodes = []
-    if not output:
-        return jsonify({"nodes": nodes})
-
-    lines = output.strip().split("\n")
-    # skip header if present
-    if len(lines) > 0 and ("NODELIST" in lines[0].upper() or "%N" in lines[0]):
-        lines = lines[1:]
-
-    for line in lines:
-        parts = line.split("|")
-        if len(parts) < 4:
-            continue
-        name = parts[0].strip()
-        state = parts[1].strip()
-        cpu_field = parts[2].strip()
-        mem_field = parts[3].strip()
-
-        # cpu_field is usually like '0/16/0/16' (alloc/idle/other/total)
-        cpus_allocated = cpus_idle = cpus_offline = cpus_total = 0
-        try:
+    total_cpus = total_allocated_cpus = 0
+    total_memory = total_allocated_memory = 0
+    partitions = {}
+    
+    if node_output:
+        lines = node_output.strip().split("\n")
+        if len(lines) > 1:  # Skip header
+            lines = lines[1:]
+            
+        for line in lines:
+            parts = line.split("|")
+            if len(parts) < 6:
+                continue
+                
+            name, state, cpu_field, total_mem, free_mem, partition = [p.strip() for p in parts]
+            
+            # Parse CPU information (format: allocated/idle/other/total)
             cpu_parts = cpu_field.split("/")
             if len(cpu_parts) == 4:
                 cpus_allocated = int(cpu_parts[0])
                 cpus_idle = int(cpu_parts[1])
-                cpus_offline = int(cpu_parts[2])
                 cpus_total = int(cpu_parts[3])
-        except Exception:
-            pass
+            else:
+                cpus_allocated = cpus_idle = cpus_total = 0
+                
+            # Parse memory values
+            total_mem_gb = parse_memory_value(total_mem)
+            free_mem_gb = parse_memory_value(free_mem)
+            used_mem_gb = total_mem_gb - free_mem_gb
+            
+            # Update totals
+            total_cpus += cpus_total
+            total_allocated_cpus += cpus_allocated
+            total_memory += total_mem_gb
+            total_allocated_memory += used_mem_gb
+            
+            # Track partition statistics
+            if partition not in partitions:
+                partitions[partition] = {
+                    "name": partition,
+                    "total_nodes": 0,
+                    "allocated_nodes": 0,
+                    "total_cpus": 0,
+                    "allocated_cpus": 0,
+                    "total_memory": 0,
+                    "allocated_memory": 0
+                }
+            
+            p_stats = partitions[partition]
+            p_stats["total_nodes"] += 1
+            if state.startswith(("alloc", "mix")):
+                p_stats["allocated_nodes"] += 1
+            p_stats["total_cpus"] += cpus_total
+            p_stats["allocated_cpus"] += cpus_allocated
+            p_stats["total_memory"] += total_mem_gb
+            p_stats["allocated_memory"] += used_mem_gb
+            
+            nodes.append({
+                "name": name,
+                "state": state,
+                "partition": partition,
+                "cpus_allocated": cpus_allocated,
+                "cpus_idle": cpus_idle,
+                "cpus_total": cpus_total,
+                "memory_total": total_mem_gb,
+                "memory_free": free_mem_gb,
+                "memory_used": used_mem_gb
+            })
+    
+    # Get GPU information if available
+    gpu_nodes = {}
+    gpu_output = run_command(["sinfo", "-N", "-o", "%N|%G"])
+    if gpu_output:
+        lines = gpu_output.strip().split("\n")
+        if len(lines) > 1:
+            for line in lines[1:]:
+                parts = line.split("|")
+                if len(parts) == 2:
+                    node, gpu = parts
+                    if gpu.strip() not in ('N/A', '(null)'):
+                        gpu_nodes[node.strip()] = gpu.strip()
+    
+    # Combine all information
+    cluster_stats = {
+        "total_nodes": len(nodes),
+        "allocated_nodes": sum(1 for n in nodes if n["state"].startswith(("alloc", "mix"))),
+        "total_cpus": total_cpus,
+        "allocated_cpus": total_allocated_cpus,
+        "total_memory": total_memory,
+        "allocated_memory": total_allocated_memory,
+        "partitions": list(partitions.values()),
+        "nodes": nodes,
+        "gpu_nodes": gpu_nodes
+    }
+    
+    return jsonify(cluster_stats)
 
-        # mem_field may contain units; try to normalize to MB if possible, otherwise keep raw
-        memory = mem_field
-
-        nodes.append({
-            "name": name,
-            "state": state,
-            "cpus_allocated": cpus_allocated,
-            "cpus_idle": cpus_idle,
-            "cpus_offline": cpus_offline,
-            "cpus": cpus_total,
-            "memory_allocated": None,
-            "memory": memory
-        })
-
-    return jsonify({"nodes": nodes})
+@app.route("/api/usage", methods=["GET"])
+def get_usage():
+    """Legacy endpoint that redirects to /api/resources"""
+    return get_resources()
 
 
 @app.route("/api/submit/sbatch", methods=["POST"])
@@ -408,6 +493,27 @@ def submit_salloc():
 def cancel_job(job_id):
     output = run_command(["scancel", str(job_id)])
     return jsonify({"result": output})
+
+
+@app.route('/debug/sessions', methods=['GET'])
+def debug_sessions():
+    # Return a lightweight view of current sessions and session->sid mapping
+    sessions = {}
+    for sid, info in app.terminal_sessions.items():
+        proc = info.get('process')
+        if isinstance(proc, dict):
+            pid = proc.get('pid')
+        else:
+            pid = getattr(proc, 'pid', None)
+        sessions[sid] = {
+            'fd': info.get('fd'),
+            'pid': pid
+        }
+
+    return jsonify({
+        'sessions': sessions,
+        'session_sids': app.session_sids
+    })
 
 
 # WebSocket handlers for terminal interaction
