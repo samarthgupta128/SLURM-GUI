@@ -15,11 +15,27 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 def run_command(cmd, shell=False):
     try:
+        # `capture_output` and `text` keywords were added in Python 3.7+.
+        # For Python 3.6 compatibility we explicitly capture stdout/stderr
+        # and use `universal_newlines=True` to get text output.
         if shell:
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+            )
         else:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-        return result.stdout if result.returncode == 0 else result.stderr
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+            )
+        stdout = result.stdout or ''
+        stderr = result.stderr or ''
+        return stdout if result.returncode == 0 else stderr
     except Exception as e:
         return str(e)
 
