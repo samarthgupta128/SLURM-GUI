@@ -7,6 +7,8 @@ import os
 import select
 import termios
 import tempfile
+import struct
+import fcntl
 
 app = Flask(__name__)
 CORS(app)
@@ -40,41 +42,58 @@ def run_command(cmd, shell=False):
         return str(e)
 
 def create_terminal_session(resource_params):
-    """Create a new terminal session with salloc + srun for older SLURM versions"""
+    """Create a new terminal session with salloc using simplest working approach"""
     print(f"Creating terminal session with params: {resource_params}")
     
-    # First, build salloc command (removed --immediate to allow waiting for resources)
-    salloc_cmd = ["salloc", "--no-shell"]  # --no-shell because we'll use srun for the shell
+    # Build salloc command with minimal parameters and add bash directly
+    salloc_cmd = ["salloc"]
     if resource_params.get("nodes"):
         salloc_cmd.extend(["--nodes", str(resource_params["nodes"])])
     if resource_params.get("memory"):
         salloc_cmd.extend(["--mem", f"{resource_params['memory']}G"])
     if resource_params.get("time"):
         salloc_cmd.extend(["--time", f"{resource_params['time']}:00:00"])
-    # Add --quiet to reduce noise in output
-    salloc_cmd.append("--quiet")
+    
+    # Add bash at the end to start shell immediately
+    salloc_cmd.append("/bin/bash")
 
     print(f"Running salloc command: {' '.join(salloc_cmd)}")
 
-    # Create pseudo-terminal for the srun command that will follow
+    # Create pseudo-terminal
     master_fd, slave_fd = pty.openpty()
 
     try:
-        # Start salloc process first to get the allocation
-        print("Starting resource allocation...")
-        salloc_process = subprocess.Popen(
+        # Set terminal size
+        rows, cols = 24, 80  # Default size
+        winsize = struct.pack('HHHH', rows, cols, 0, 0)
+        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+        
+        # Make the slave PTY our controlling terminal
+        fcntl.fcntl(slave_fd, fcntl.F_SETFD, 0)
+        
+        # Start salloc process with PTY
+        process = subprocess.Popen(
             salloc_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            preexec_fn=os.setsid,
+            env=dict(os.environ, TERM='xterm')
         )
 
-        print("Waiting for salloc allocation (timeout: 30s)...")
-        try:
-            stdout, stderr = salloc_process.communicate(timeout=30)  # Increased timeout to 30 seconds
-        except subprocess.TimeoutExpired:
-            salloc_process.terminate()
-            raise Exception("Resource allocation is taking longer than expected. The cluster might be busy. Please try again later.")
+        # Close slave fd, we'll use master to communicate
+        os.close(slave_fd)
+        print("Started salloc process with PTY")
+        
+        return master_fd, process
+        
+    except Exception as e:
+        print(f"Error in create_terminal_session: {str(e)}")
+        os.close(master_fd)
+        os.close(slave_fd)
+        if 'process' in locals():
+            process.terminate()
+        raise
         print(f"salloc stdout: {stdout}")
         print(f"salloc stderr: {stderr}")
         
