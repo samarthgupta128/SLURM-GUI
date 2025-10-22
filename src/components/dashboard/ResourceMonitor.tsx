@@ -43,6 +43,10 @@ const ResourceMonitor = () => {
     const fetchStats = async () => {
       try {
         setLoading(true);
+        // Ensure we resolved a working base (useful when backend is in Docker)
+        const { resolveApiBase } = await import('@/config/api');
+        await resolveApiBase('/api/resources');
+
         const response = await fetch(buildApiUrl('/api/resources'), {
           headers: {
             'Accept': 'application/json',

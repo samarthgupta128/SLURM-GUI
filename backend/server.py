@@ -191,11 +191,26 @@ def parse_memory_value(memory_str):
     """Convert memory string (e.g., '16G', '1024M') to GB value"""
     try:
         if not memory_str:
+            print(f"Warning: Empty memory string")
             return 0
         
-        memory_str = memory_str.strip().upper()
-        value = float(''.join(filter(lambda x: x.isdigit() or x == '.', memory_str)))
+        memory_str = str(memory_str).strip().upper()
+        print(f"Parsing memory value: {memory_str}")
         
+        # Handle 'N/A' or similar
+        if memory_str in ['N/A', 'NONE', '(NULL)']:
+            print(f"Warning: Invalid memory string: {memory_str}")
+            return 0
+            
+        # Extract numeric part
+        numeric_part = ''.join(c for c in memory_str if c.isdigit() or c == '.')
+        if not numeric_part:
+            print(f"Warning: No numeric value in memory string: {memory_str}")
+            return 0
+            
+        value = float(numeric_part)
+        
+        # Convert to GB
         if 'T' in memory_str:
             return value * 1024
         elif 'G' in memory_str:
@@ -204,19 +219,89 @@ def parse_memory_value(memory_str):
             return value / 1024
         elif 'K' in memory_str:
             return value / (1024 * 1024)
+            
+        print(f"Warning: No unit in memory string: {memory_str}, assuming GB")
         return value
-    except Exception:
+        
+    except Exception as e:
+        print(f"Error parsing memory value '{memory_str}': {str(e)}")
         return 0
+
+@app.route("/api/debug/sample-resources", methods=["GET"])
+def get_sample_resources():
+    """Return sample resource data for testing the UI"""
+    return jsonify({
+        "total_nodes": 4,
+        "allocated_nodes": 2,
+        "total_cpus": 64,
+        "allocated_cpus": 32,
+        "total_memory": 256,
+        "allocated_memory": 128,
+        "partitions": [
+            {
+                "name": "compute",
+                "total_nodes": 2,
+                "allocated_nodes": 1,
+                "total_cpus": 32,
+                "allocated_cpus": 16,
+                "total_memory": 128,
+                "allocated_memory": 64
+            },
+            {
+                "name": "gpu",
+                "total_nodes": 2,
+                "allocated_nodes": 1,
+                "total_cpus": 32,
+                "allocated_cpus": 16,
+                "total_memory": 128,
+                "allocated_memory": 64
+            }
+        ],
+        "nodes": [
+            {
+                "name": "node1",
+                "state": "allocated",
+                "partition": "compute",
+                "cpus_allocated": 16,
+                "cpus_idle": 0,
+                "cpus_total": 16,
+                "memory_total": 64,
+                "memory_free": 0,
+                "memory_used": 64
+            },
+            {
+                "name": "node2",
+                "state": "idle",
+                "partition": "compute",
+                "cpus_allocated": 0,
+                "cpus_idle": 16,
+                "cpus_total": 16,
+                "memory_total": 64,
+                "memory_free": 64,
+                "memory_used": 0
+            }
+        ],
+        "gpu_nodes": {
+            "node3": "Tesla V100",
+            "node4": "Tesla V100"
+        }
+    })
 
 @app.route("/api/resources", methods=["GET"])
 def get_resources():
     """Get comprehensive cluster resource information"""
     try:
+        debug_info = {}  # Store command outputs for debugging
+        
         # Check if sinfo is available
         sinfo_check = run_command(["which", "sinfo"])
         if not sinfo_check:
+            print("SLURM sinfo command not found in PATH")
+            debug_info["error"] = "sinfo not found in PATH"
+            debug_info["path"] = os.environ.get("PATH", "")
             return jsonify({
                 "error": "SLURM commands not available",
+                "debug": debug_info,
                 "total_nodes": 0,
                 "allocated_nodes": 0,
                 "total_cpus": 0,
@@ -230,20 +315,23 @@ def get_resources():
     
         # Get node information with detailed CPU, memory, and state
         node_output = run_command([
-            "sinfo", 
-            "-N", 
-            "-o", 
+            "sinfo",
+            "-N",
+            "-o",
             "%N|%t|%C|%m|%e|%P"
         ])  # name|state|CPUs|memory|free_mem|partition
-        
+
+        # Keep raw output for debugging (useful inside Docker)
+        raw_node_output = node_output
+
         if not node_output or "error" in node_output.lower():
             raise Exception(f"Failed to get node information: {node_output}")
-        
+
         nodes = []
         total_cpus = total_allocated_cpus = 0
         total_memory = total_allocated_memory = 0
         partitions = {}
-        
+
         lines = [line for line in node_output.strip().split("\n") if line.strip()]
         if len(lines) > 1:  # Skip header
             lines = lines[1:]
@@ -324,7 +412,8 @@ def get_resources():
     
     # Get GPU information if available
     gpu_nodes = {}
-    gpu_output = run_command(["sinfo", "-N", "-o", "%N|%G"])
+    gpu_output = run_command(["sinfo", "-N", "-o", "%N|%G"]) if 'sinfo' in locals() or True else ''
+    raw_gpu_output = gpu_output
     if gpu_output:
         lines = gpu_output.strip().split("\n")
         if len(lines) > 1:
@@ -347,6 +436,14 @@ def get_resources():
         "nodes": nodes,
         "gpu_nodes": gpu_nodes
     }
+    # Attach raw outputs for debugging in dev environments
+    try:
+        cluster_stats["debug"] = {
+            "raw_node_output": raw_node_output,
+            "raw_gpu_output": raw_gpu_output
+        }
+    except Exception:
+        pass
     
     return jsonify(cluster_stats)
 
