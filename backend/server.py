@@ -13,12 +13,12 @@ import fcntl
 app = Flask(__name__)
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:5173", "http://localhost:8000"],
+        "origins": ["http://localhost:5173", "http://localhost:8001"],
         "methods": ["GET", "POST", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "Accept"]
     }
 })
-socketio = SocketIO(app, cors_allowed_origins=["http://localhost:5173", "http://localhost:8000"])
+socketio = SocketIO(app, cors_allowed_origins=["http://localhost:5173", "http://localhost:8001"])
 
 
 def run_command(cmd, shell=False):
@@ -708,8 +708,8 @@ if __name__ == '__main__':
         sinfo_test = run_command(["sinfo", "--version"])
         print(f"sinfo version check: {sinfo_test}")
         
-        print("\nStarting server on http://0.0.0.0:8000")
-        socketio.run(app, host='0.0.0.0', port=8000, debug=True)
+        print("\nStarting server on http://0.0.0.0:8001")
+        socketio.run(app, host='0.0.0.0', port=8001, debug=True)
     except Exception as e:
         print(f"Error starting server: {e}")
         import traceback

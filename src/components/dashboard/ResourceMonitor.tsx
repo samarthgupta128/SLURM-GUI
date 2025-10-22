@@ -2,6 +2,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from "recharts";
 import { useEffect, useState } from "react";
 import { Progress } from "@/components/ui/progress";
+import { buildApiUrl } from "@/config/api";
 
 interface ClusterStats {
   total_nodes: number;
@@ -42,7 +43,7 @@ const ResourceMonitor = () => {
     const fetchStats = async () => {
       try {
         setLoading(true);
-        const response = await fetch('http://localhost:8000/api/resources', {
+        const response = await fetch(buildApiUrl('/api/resources'), {
           headers: {
             'Accept': 'application/json',
           }
