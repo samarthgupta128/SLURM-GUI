@@ -72,14 +72,22 @@ def create_terminal_session(resource_params):
             print(f"Warning: could not set window size on slave PTY: {ex}")
         
         # Start salloc process with PTY
-        process = subprocess.Popen(
-            salloc_cmd,
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            preexec_fn=os.setsid,
-            env=dict(os.environ, TERM='xterm')
-        )
+        # Use pty.fork() so the child has the PTY as its controlling terminal.
+        pid, master_fd = pty.fork()
+        if pid == 0:
+            # Child: replace process with salloc + /bin/bash
+            try:
+                # set session env
+                os.environ['TERM'] = 'xterm'
+                # Execute salloc command
+                os.execvp(salloc_cmd[0], salloc_cmd)
+            except Exception as e:
+                print(f"Failed to exec salloc: {e}")
+                os._exit(1)
+
+        # Parent: pid is child pid, master_fd is file descriptor for IO
+        print(f"Started child salloc pid={pid} with master_fd={master_fd}")
+        return master_fd, {'pid': pid}
 
         # Close slave fd, we'll use master to communicate
         os.close(slave_fd)
@@ -381,7 +389,12 @@ def submit_salloc():
             "fd": master_fd,
             "process": process
         }
-        print(f"Session created: {session_id}, fd={master_fd}, pid={process.pid}")
+        # process may be a Popen or a dict {'pid': pid}
+        try:
+            pid_info = process.pid
+        except Exception:
+            pid_info = process.get('pid') if isinstance(process, dict) else None
+        print(f"Session created: {session_id}, fd={master_fd}, pid={pid_info}")
         
         return jsonify({
             "message": "Session created",
@@ -471,14 +484,31 @@ def read_terminal_output(session_id):
     while True:
         # If the process has exited, notify client and stop
         try:
-            if proc and proc.poll() is not None:
-                exit_code = proc.returncode
-                print(f"Process for session {session_id} exited with code {exit_code}")
-                if sid:
-                    socketio.emit('terminal_error', {'error': 'Terminal process exited'}, to=sid)
-                else:
-                    socketio.emit('terminal_error', {'error': 'Terminal process exited'})
-                break
+            # If proc is a Popen, use poll(); if it's a dict from pty.fork, use waitpid with WNOHANG
+            if isinstance(proc, dict) and proc.get('pid'):
+                pid = proc.get('pid')
+                try:
+                    waited = os.waitpid(pid, os.WNOHANG)
+                    if waited[0] == pid:
+                        exit_code = waited[1]
+                        print(f"Child pid {pid} exited with status {exit_code}")
+                        if sid:
+                            socketio.emit('terminal_error', {'error': 'Terminal process exited'}, to=sid)
+                        else:
+                            socketio.emit('terminal_error', {'error': 'Terminal process exited'})
+                        break
+                except ChildProcessError:
+                    # Already reaped
+                    break
+            elif hasattr(proc, 'poll'):
+                if proc.poll() is not None:
+                    exit_code = proc.returncode
+                    print(f"Process for session {session_id} exited with code {exit_code}")
+                    if sid:
+                        socketio.emit('terminal_error', {'error': 'Terminal process exited'}, to=sid)
+                    else:
+                        socketio.emit('terminal_error', {'error': 'Terminal process exited'})
+                    break
 
             r, _, _ = select.select([session['fd']], [], [], 0.1)
             if session['fd'] in r:
