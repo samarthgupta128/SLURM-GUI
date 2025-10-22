@@ -43,14 +43,16 @@ def create_terminal_session(resource_params):
     """Create a new terminal session with salloc + srun for older SLURM versions"""
     print(f"Creating terminal session with params: {resource_params}")
     
-    # First, build salloc command with --immediate flag to avoid waiting
-    salloc_cmd = ["salloc", "--immediate"]
+    # First, build salloc command (removed --immediate to allow waiting for resources)
+    salloc_cmd = ["salloc", "--no-shell"]  # --no-shell because we'll use srun for the shell
     if resource_params.get("nodes"):
         salloc_cmd.extend(["--nodes", str(resource_params["nodes"])])
     if resource_params.get("memory"):
         salloc_cmd.extend(["--mem", f"{resource_params['memory']}G"])
     if resource_params.get("time"):
         salloc_cmd.extend(["--time", f"{resource_params['time']}:00:00"])
+    # Add --quiet to reduce noise in output
+    salloc_cmd.append("--quiet")
 
     print(f"Running salloc command: {' '.join(salloc_cmd)}")
 
@@ -59,6 +61,7 @@ def create_terminal_session(resource_params):
 
     try:
         # Start salloc process first to get the allocation
+        print("Starting resource allocation...")
         salloc_process = subprocess.Popen(
             salloc_cmd,
             stdout=subprocess.PIPE,
@@ -66,8 +69,12 @@ def create_terminal_session(resource_params):
             universal_newlines=True
         )
 
-        print("Waiting for salloc allocation...")
-        stdout, stderr = salloc_process.communicate(timeout=10)  # Add 10 second timeout
+        print("Waiting for salloc allocation (timeout: 30s)...")
+        try:
+            stdout, stderr = salloc_process.communicate(timeout=30)  # Increased timeout to 30 seconds
+        except subprocess.TimeoutExpired:
+            salloc_process.terminate()
+            raise Exception("Resource allocation is taking longer than expected. The cluster might be busy. Please try again later.")
         print(f"salloc stdout: {stdout}")
         print(f"salloc stderr: {stderr}")
         
