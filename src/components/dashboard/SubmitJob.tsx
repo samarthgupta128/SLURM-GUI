@@ -56,25 +56,29 @@ const SubmitJob = () => {
   const handleAllocSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!jobData.name || !jobData.nodes || !jobData.memory || !jobData.timeLimit) {
-      toast.error("Please fill in all fields");
+    if (!jobData.name || !jobData.nodes || !jobData.timeLimit) {
+      toast.error("Please fill in all required fields (Job Name, Nodes, Time Limit)");
       return;
     }
 
     setLoading(true);
     try {
+      // Build request body, omitting memory if blank
+      const reqBody: any = {
+        username: 'testuser', // TODO: Replace with actual username
+        nodes: parseInt(jobData.nodes),
+        time: parseInt(jobData.timeLimit),
+        jobName: jobData.name
+      };
+      if (jobData.memory && jobData.memory.trim() !== "") {
+        reqBody.memory = parseInt(jobData.memory);
+      }
       const response = await fetch('http://localhost:8000/api/submit/salloc', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          username: 'testuser', // TODO: Replace with actual username
-          nodes: parseInt(jobData.nodes),
-          memory: parseInt(jobData.memory),
-          time: parseInt(jobData.timeLimit),
-          jobName: jobData.name
-        })
+        body: JSON.stringify(reqBody)
       });
 
       if (!response.ok) {
@@ -216,12 +220,12 @@ const SubmitJob = () => {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="memory">Memory Requirement (GB)</Label>
+                <Label htmlFor="memory">Memory Requirement (GB, optional)</Label>
                 <Input
                   id="memory"
                   type="number"
-                  min="1"
-                  placeholder="e.g., 32"
+                  min=""
+                  placeholder="Leave blank for auto allocation"
                   value={jobData.memory}
                   onChange={(e) => setJobData({ ...jobData, memory: e.target.value })}
                   disabled={loading}
