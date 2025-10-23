@@ -24,9 +24,9 @@ const Terminal = ({ onClose }: TerminalProps) => {
     }
 
     console.log('Attempting to connect to socket.io with session:', sessionId);
+    // Let socket.io-client choose transports (polling -> websocket if available).
     const socket = io('http://localhost:8000', {
-      transports: ['websocket'],
-      reconnectionAttempts: 3,
+      reconnectionAttempts: 10,
       timeout: 20000,
     });
     socketRef.current = socket;
@@ -74,7 +74,7 @@ const Terminal = ({ onClose }: TerminalProps) => {
 
   const handleCommand = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && input.trim()) {
-      if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      if (!socketRef.current || !socketRef.current.connected) {
         setOutput(prev => [...prev, "Error: Not connected to terminal"]);
         return;
       }
@@ -82,17 +82,16 @@ const Terminal = ({ onClose }: TerminalProps) => {
       setOutput(prev => [...prev, `$ ${input}`]);
       
       if (input.toLowerCase() === "exit") {
-        socketRef.current.close();
+        socketRef.current.disconnect();
         onClose();
         return;
       }
 
-      // Send command to server
-      socketRef.current.send(JSON.stringify({
-        type: 'terminal_input',
+      // Send command to server using Socket.IO emit
+      socketRef.current.emit('terminal_input', {
         input: input + '\n',
         session_id: localStorage.getItem('currentTerminalSession')
-      }));
+      });
       
       setInput("");
     }
