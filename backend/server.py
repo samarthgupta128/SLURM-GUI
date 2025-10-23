@@ -286,74 +286,236 @@ def get_sample_resources():
             "node4": "Tesla V100"
         }
     })
-
 def get_partition_info():
     """Get detailed partition information using scontrol"""
-    output = run_command(["scontrol", "show", "partition", "-o"])
-    partitions = []
-    
-    if output:
+    try:
+        output = subprocess.run(["scontrol", "show", "partition", "-o"])
+        partitions = []
+        
+        if output:
+            for line in output.strip().split('\n'):
+                parts = dict(item.split('=', 1) for item in line.split() if '=' in item)
+                partition = {
+                    'name': parts.get('PartitionName', 'unknown'),
+                    'nodes': parts.get('Nodes', ''),
+                    'state': parts.get('State', 'unknown'),
+                    'max_time': parts.get('MaxTime', 'infinite'),
+                    'default': parts.get('Default', 'NO') == 'YES',
+                    'total_nodes': int(parts.get('TotalNodes', '0')),
+                    'available_nodes': int(parts.get('AvailableNodes', '0')),
+                    'allocated_nodes': 0  # Will be calculated from node info
+                }
+                
+                # Get detailed node information for this partition
+                node_output = run_command(["sinfo", "-p", partition['name'], "-o", "%n %C %m"])
+                if node_output:
+                    lines = node_output.strip().split('\n')[1:]  # Skip header
+                    total_cpus = allocated_cpus = total_mem = 0
+                    for node_line in lines:
+                        if not node_line.strip():
+                            continue
+                        node_parts = node_line.split()
+                        if len(node_parts) >= 3:
+                            cpu_info = node_parts[1].split('/')
+                            if len(cpu_info) == 4:
+                                allocated_cpus += int(cpu_info[0])
+                                total_cpus += int(cpu_info[3])
+                            mem = parse_memory_value(node_parts[2])
+                            total_mem += mem
+                    
+                    partition['total_cpus'] = total_cpus
+                    partition['allocated_cpus'] = allocated_cpus
+                    partition['total_memory'] = total_mem
+                
+                partitions.append(partition)
+
+        print(f"Retrieved partition info: {partitions}")  # Debug log
+        return partitions
+    except Exception as e:
+        print(f"Error getting partition info: {e}")
+        return []
+@app.route("/api/partitions", methods=["GET"])
+def get_partitions():
+    """Get partition information"""
+    try:
+        # Get basic partition info
+        output = run_command(["scontrol", "show", "partition", "-o"], capture_output=True, text=True, check=True)
+        if not output:
+            raise Exception("No output from scontrol command")
+
+        partitions = []
         for line in output.strip().split('\n'):
             parts = dict(item.split('=', 1) for item in line.split() if '=' in item)
+            
+            # Get node information for this partition
+            node_output = run_command([
+                "sinfo", 
+                "-p", parts.get('PartitionName', ''), 
+                "-h", 
+                "-o", "%D %C %m"
+            ])
+            
+            node_info = node_output.strip().split()
+            if len(node_info) >= 3:
+                total_nodes = int(node_info[0])
+                cpu_info = node_info[1].split('/')
+                mem_info = parse_memory_value(node_info[2])
+            else:
+                total_nodes = 0
+                cpu_info = ['0', '0', '0', '0']
+                mem_info = 0
+
             partition = {
                 'name': parts.get('PartitionName', 'unknown'),
-                'nodes': parts.get('Nodes', ''),
                 'state': parts.get('State', 'unknown'),
                 'max_time': parts.get('MaxTime', 'infinite'),
+                'nodes': parts.get('Nodes', ''),
                 'default': parts.get('Default', 'NO') == 'YES',
-                'total_nodes': int(parts.get('TotalNodes', '0')),
+                'total_nodes': total_nodes,
+                'allocated_cpus': int(cpu_info[0]),
+                'total_cpus': int(cpu_info[3]),
+                'memory': mem_info,
                 'available_nodes': int(parts.get('AvailableNodes', '0')),
-                'allocated_nodes': 0,  # Will be calculated from node info
-                'total_cpus': 0,      # Will be calculated from node info
-                'allocated_cpus': 0,   # Will be calculated from node info
-                'total_memory': 0,     # Will be calculated from node info
-                'allocated_memory': 0   # Will be calculated from node info
+                'max_nodes_per_job': int(parts.get('MaxNodes', '0'))
             }
             partitions.append(partition)
-    return partitions
 
-def get_node_info():
-    """Get detailed node information using scontrol"""
-    output = run_command(["scontrol", "show", "node", "-o"])
-    nodes = []
-    
-    if output:
-        for line in output.strip().split('\n'):
-            parts = dict(item.split('=', 1) for item in line.split() if '=' in item)
+        print(f"Retrieved {len(partitions)} partitions")
+        return jsonify({
+            "partitions": partitions,
+            "total_partitions": len(partitions),
+            "default_partition": next((p for p in partitions if p['default']), None)
+        })
+
+    except Exception as e:
+        print(f"Error getting partitions: {e}")
+        return jsonify({
+            "error": str(e),
+            "partitions": [],
+            "total_partitions": 0,
+            "default_partition": None
+        }), 500
+def get_sinfo_data():
+    cmd = ['sinfo','-o', '%P %t %C %m %l']
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        nodes_data=[]
+        lines = result.stdout.strip().split("\n")[1:]
+        total_nodes = 0
+        idle_nodes = 0
+        alloc_nodes = 0
+        total_cpus = 0
+        cpus_in_use = 0
+        total_mem_gb = 0
+        mem_in_use_gb = 0
+        for line in lines:
+            parts = line.split()
+            if len(parts) < 5 : continue
+            partition, state, cpus_str, mem_mb, alloc_mem_mb = parts            
+            cpu_parts = cpus_str.split('/')
+            alloc_cpu = int(cpu_parts[0])
+            idle_cpu = int(cpu_parts[1])
+            total_cpu_node = int(cpu_parts[3])
+
+            total_nodes += 1 # This is tricky, sinfo groups nodes.
+                             # A better command is 'scontrol show node'
+            total_cpus += total_cpu_node
+            cpus_in_use += alloc_cpu
             
-            # Parse CPU information
-            cpus_total = int(parts.get('CPUTot', '0'))
-            cpus_allocated = int(parts.get('CPUAlloc', '0'))
+            total_mem_gb += int(mem_mb) / 1024
+            mem_in_use_gb += int(alloc_mem_mb) / 1024
             
-            # Parse memory information (convert to GB)
-            memory_total = int(parts.get('RealMemory', '0')) // 1024  # Convert MB to GB
-            memory_allocated = int(parts.get('AllocMem', '0')) // 1024
-            
-            # Parse GPU information if available
-            gres = parts.get('Gres', '')
-            gpus = None
-            if 'gpu:' in gres.lower():
-                gpu_info = [g for g in gres.split(',') if 'gpu' in g.lower()]
-                if gpu_info:
-                    gpus = gpu_info[0]
-            
-            node = {
-                'name': parts.get('NodeName', 'unknown'),
-                'state': parts.get('State', 'unknown'),
-                'partition': parts.get('Partitions', 'unknown'),
-                'cpus_total': cpus_total,
-                'cpus_allocated': cpus_allocated,
-                'cpus_idle': cpus_total - cpus_allocated,
-                'memory_total': memory_total,
-                'memory_allocated': memory_allocated,
-                'memory_free': memory_total - memory_allocated,
-                'gpus': gpus,
-                'features': parts.get('AvailableFeatures', ''),
-                'active_features': parts.get('ActiveFeatures', ''),
-                'load': parts.get('CPULoad', '0.00')
+            if state == 'idle':
+                idle_nodes += 1 # Again, simplified
+            elif state in ['alloc', 'mix']:
+                alloc_nodes += 1
+
+        cpu_percent = (cpus_in_use / total_cpus * 100) if total_cpus > 0 else 0
+        mem_percent = (mem_in_use_gb / total_mem_gb * 100) if total_mem_gb > 0 else 0
+        return {
+            "totalNodes": total_nodes, # Fix this by parsing 'scontrol show node'
+                "allocNodes": alloc_nodes,
+                "idleNodes": idle_nodes,
+                "cpuUtilization": cpu_percent,
+                "cpusInUse": cpus_in_use,
+                "totalCpus": total_cpus,
+                "memoryUsage": mem_percent,
+                "memInUseGB": round(mem_in_use_gb, 2),
+                "totalMemGB": round(total_mem_gb, 2)
             }
-            nodes.append(node)
-    return nodes
+    except Exception as e:
+        print(f"Error parsing sinfo: {e}")
+        return {"error": str(e)} # Send error to frontend
+
+
+    
+# def get_partition_info():
+#     """Get detailed partition information using scontrol"""
+#     output = run_command(["scontrol", "show", "partition", "-o"])
+#     partitions = []
+    
+#     if output:
+#         for line in output.strip().split('\n'):
+#             parts = dict(item.split('=', 1) for item in line.split() if '=' in item)
+#             partition = {
+#                 'name': parts.get('PartitionName', 'unknown'),
+#                 'nodes': parts.get('Nodes', ''),
+#                 'state': parts.get('State', 'unknown'),
+#                 'max_time': parts.get('MaxTime', 'infinite'),
+#                 'default': parts.get('Default', 'NO') == 'YES',
+#                 'total_nodes': int(parts.get('TotalNodes', '0')),
+#                 'available_nodes': int(parts.get('AvailableNodes', '0')),
+#                 'allocated_nodes': 0,  # Will be calculated from node info
+#                 'total_cpus': 0,      # Will be calculated from node info
+#                 'allocated_cpus': 0,   # Will be calculated from node info
+#                 'total_memory': 0,     # Will be calculated from node info
+#                 'allocated_memory': 0   # Will be calculated from node info
+#             }
+#             partitions.append(partition)
+#     return partitions
+
+# def get_node_info():
+#     """Get detailed node information using scontrol"""
+#     output = run_command(["scontrol", "show", "node", "-o"])
+#     nodes = []
+    
+#     if output:
+#         for line in output.strip().split('\n'):
+#             parts = dict(item.split('=', 1) for item in line.split() if '=' in item)
+            
+#             # Parse CPU information
+#             cpus_total = int(parts.get('CPUTot', '0'))
+#             cpus_allocated = int(parts.get('CPUAlloc', '0'))
+            
+#             # Parse memory information (convert to GB)
+#             memory_total = int(parts.get('RealMemory', '0')) // 1024  # Convert MB to GB
+#             memory_allocated = int(parts.get('AllocMem', '0')) // 1024
+            
+#             # Parse GPU information if available
+#             gres = parts.get('Gres', '')
+#             gpus = None
+#             if 'gpu:' in gres.lower():
+#                 gpu_info = [g for g in gres.split(',') if 'gpu' in g.lower()]
+#                 if gpu_info:
+#                     gpus = gpu_info[0]
+            
+#             node = {
+#                 'name': parts.get('NodeName', 'unknown'),
+#                 'state': parts.get('State', 'unknown'),
+#                 'partition': parts.get('Partitions', 'unknown'),
+#                 'cpus_total': cpus_total,
+#                 'cpus_allocated': cpus_allocated,
+#                 'cpus_idle': cpus_total - cpus_allocated,
+#                 'memory_total': memory_total,
+#                 'memory_allocated': memory_allocated,
+#                 'memory_free': memory_total - memory_allocated,
+#                 'gpus': gpus,
+#                 'features': parts.get('AvailableFeatures', ''),
+#                 'active_features': parts.get('ActiveFeatures', ''),
+#                 'load': parts.get('CPULoad', '0.00')
+#             }
+#             nodes.append(node)
+#     return nodes
 
 @app.route("/api/resources", methods=["GET"])
 def get_resources():
