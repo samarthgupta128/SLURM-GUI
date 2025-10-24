@@ -33,14 +33,24 @@ const SubmitJob = () => {
       formData.append('username', 'testuser'); // TODO: Replace with actual username
       formData.append('file', selectedFile);
 
-      const response = await fetch('http://localhost:8000/api/submit/sbatch', {
+      const response = await fetch('/api/submit/sbatch', {
         method: 'POST',
         body: formData,
       });
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || 'Failed to submit job');
+        const errorMessage = error.error || 'Failed to submit job';
+        
+        // Handle specific SLURM allocation errors
+        if (errorMessage.includes('allocation failure') || errorMessage.includes('Requested node configuration is not available')) {
+          const details = error.details?.cluster_state 
+            ? `\nCluster State: ${error.details.cluster_state}`
+            : '';
+          throw new Error(`Resource allocation failed: The requested resources are not available. ${details}\nPlease check cluster status or reduce resource requirements.`);
+        }
+        
+        throw new Error(errorMessage);
       }
 
       const data = await response.json();
@@ -73,7 +83,7 @@ const SubmitJob = () => {
       if (jobData.memory && jobData.memory.trim() !== "") {
         reqBody.memory = parseInt(jobData.memory);
       }
-      const response = await fetch('http://localhost:8000/api/submit/salloc', {
+      const response = await fetch('/api/submit/salloc', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
