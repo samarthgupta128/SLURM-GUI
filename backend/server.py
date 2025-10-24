@@ -775,167 +775,80 @@ def get_usage():
 
 @app.route("/api/submit/sbatch", methods=["POST"])
 def submit_sbatch():
-    """Handle sbatch script submission"""
-    print("Received sbatch submission request")
-    try:
-        server_user = getpass.getuser()
-    except Exception:
-        server_user = None
-    # Log requester and server environment to help debug differing sbatch behavior
-    print(f"Request remote addr: {request.remote_addr}, server user: {server_user}, euid: {os.geteuid()}")
-    print(f"Server PATH: {os.environ.get('PATH')}")
-    
-    # Accept username from form data
+    # ... (all the setup code from the beginning) ...
+    # ... (file.read(), content.replace(), shebang check) ...
 
-    username = request.form.get('username')
-    if not username or not username.strip():
-        print("No username provided in form data.")
-        return jsonify({"error": "Username is required in form data."}), 400
-
-    username = username.strip()
-    if '/' in username or '\\' in username:
-        print(f"Invalid username: {username}")
-        return jsonify({"error": "Invalid username."}), 400
-
-    if 'file' not in request.files:
-        print("No file in request.files")
-        print("Files received:", list(request.files.keys()))
-        return jsonify({"error": "No file provided"}), 400
-
-    file = request.files['file']
-    if file.filename == '':
-        print("Empty filename")
-        return jsonify({"error": "No file selected"}), 400
-
-    print(f"Received file: {file.filename} from user: {username}")
-
-    # Create user directory in files/<username>/
-    base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'files')
-    user_dir = os.path.join(base_dir, username)
-    try:
-        os.makedirs(user_dir, exist_ok=True)
-    except Exception as e:
-        print(f"Failed to create user directory {user_dir}: {e}")
-        return jsonify({"error": f"Failed to create user directory: {e}"}), 500
-
-    # Save uploaded file in user directory
-    script_path = os.path.join(user_dir, file.filename)
-    try:
-        content = file.read().decode('utf-8')
-    except Exception as e:
-        print(f"Failed to read uploaded file: {e}")
-        return jsonify({"error": f"Failed to read uploaded file: {e}"}), 400
-    print(f"Original script content:\n{content}")
-
-    # Convert DOS line endings to UNIX
-    content = content.replace('\r\n', '\n')
-
-    # Ensure script has shebang
-    if not content.startswith('#!/bin'):
-        content = '#!/bin/bash\n' + content
-
-    # Ensure basic SLURM directives are present
-    slurm_directives = []
     lines = content.splitlines()
     has_any_sbatch = any(line.strip().startswith('#SBATCH') for line in lines)
 
-    # Ensure the script writes output into the server's user directory by
-    # converting any --output directive to an absolute path inside user_dir.
+    # *** FIX: Store the output path pattern here ***
+    expected_output_pattern = None 
     output_rewritten = False
+
+    # Case 3: Rewrite existing --output
     for idx, line in enumerate(lines):
         s = line.strip()
         if s.startswith('#SBATCH') and '--output' in s:
-            # split on '=' and preserve the RHS (which may include %j)
             parts = line.split('=', 1)
             if len(parts) == 2:
-                out_val = parts[1].strip()
-                # If the value is quoted, remove quotes
-                out_val = out_val.strip('"')
+                out_val = parts[1].strip().strip('"')
                 abs_out = os.path.join(user_dir, out_val)
                 lines[idx] = f"#SBATCH --output={abs_out}"
+                
+                # *** FIX: Store the rewritten pattern ***
+                expected_output_pattern = abs_out 
+                
                 output_rewritten = True
                 print(f"Rewrote existing --output to absolute path: {lines[idx]}", flush=True)
                 break
 
-    # If there were no SBATCH directives at all, inject sensible defaults
+    # Case 1: No SBATCH directives at all
     if not has_any_sbatch:
-        slurm_directives.extend([
+        # *** FIX: Store the default .out pattern ***
+        expected_output_pattern = os.path.join(user_dir, f'{file.filename}-%j.out')
+        
+        slurm_directives = [
             '#SBATCH --job-name=default_job',
-            f'#SBATCH --output={os.path.join(user_dir, file.filename)}-%j.out',  # absolute output
+            f'#SBATCH --output={expected_output_pattern}', # Use the variable
             f'#SBATCH --error={os.path.join(user_dir, file.filename)}-%j.err',
             '#SBATCH --time=01:00:00',
             '#SBATCH --ntasks=1'
-        ])
+        ]
         lines = [lines[0]] + slurm_directives + lines[1:]
 
-    # If there were SBATCH directives but none for --output, add one pointing to user_dir
+    # Case 2: SBATCH directives but no --output
     if has_any_sbatch and not output_rewritten:
-        # insert after the shebang line
+        # *** FIX: Store the default .log pattern ***
+        expected_output_pattern = os.path.join(user_dir, f'{file.filename}-%j.log')
+        
         insert_at = 1
-        lines = lines[:insert_at] + [f'#SBATCH --output={os.path.join(user_dir, file.filename)}-%j.log'] + lines[insert_at:]
+        lines = lines[:insert_at] + [f'#SBATCH --output={expected_output_pattern}'] + lines[insert_at:]
 
     content = '\n'.join(lines)
+    
+    # ... (write file, chmod, run sbatch) ...
 
-    print(f"Processed script content:\n{content}")
-
-    with open(script_path, 'w') as f:
-        f.write(content)
-
-    # Make script executable
-    os.chmod(script_path, 0o755)
-
-    # First check if sbatch is available
-    sbatch_check = run_command(["which", "sbatch"])
-    print(f"sbatch location: {sbatch_check}")
-
-    # Check available resources first
-    sinfo_cmd = ["sinfo", "-h", "-o", "%C"]  # Get cluster resource info
-    sinfo_output = run_command(sinfo_cmd)
-    print(f"Current cluster resources: {sinfo_output}")
-
-    # Verify script is valid and check resource availability
-    verify_cmd = ["sbatch", "--test-only", script_path]
-    print(f"Verifying script: {' '.join(verify_cmd)} (cwd={user_dir})", flush=True)
-    verify_output = run_command(verify_cmd, cwd=user_dir, timeout=30)
-    print(f"Verification output: {verify_output}", flush=True)
-
-    if "error" in verify_output.lower():
-        error_msg = verify_output.strip()
-        
-        # Check for specific allocation errors
-        if "allocation failure" in error_msg.lower() or "not available" in error_msg.lower():
-            # Get current cluster state for better error message
-            cluster_state = run_command(["sinfo", "-h", "-o", "%n %C"])
-            return jsonify({
-                "error": f"Resource allocation failed: {error_msg}",
-                "details": {
-                    "cluster_state": cluster_state,
-                    "verification_output": verify_output
-                }
-            }), 400
-        
-        return jsonify({
-            "error": f"Invalid script: {error_msg}",
-            "details": {"verification_output": verify_output}
-        }), 400
-
-    # Submit the job from user directory
-    cmd = ["sbatch", script_path]
-    print(f"Running command: {' '.join(cmd)} in {user_dir}", flush=True)
     output = run_command(cmd, cwd=user_dir, timeout=30)
     print(f"sbatch output: {output}", flush=True)
 
-    # Try to parse job ID from output
     job_id = None
-    output_file = None
+    
+    # *** FIX: This will hold the *final* file path ***
+    final_output_file_path = None 
+
     if "Submitted batch job" in output:
         try:
             job_id = output.split()[-1]
             print(f"Parsed job ID: {job_id}")
 
-            # Output file path (as set above)
-            output_file = os.path.join(user_dir, f"{file.filename}-{job_id}.out")
-            print(f"Expected output file: {output_file}")
+            if expected_output_pattern:
+                # *** FIX: Create the final path by replacing %j ***
+                final_output_file_path = expected_output_pattern.replace('%j', job_id)
+                # Note: This only handles %j. A full solution would
+                # also handle %x (job name), %u (user), etc.
+                print(f"Expected output file: {final_output_file_path}")
+            else:
+                print("Error: expected_output_pattern was not set!")
 
         except Exception as e:
             print(f"Error parsing job ID: {e}")
@@ -943,30 +856,32 @@ def submit_sbatch():
     else:
         print("No job ID found in output")
 
-    # If output file exists, send it as download, else return job info
-    import time
+    # ...
     wait_time = 0
-    job_output = None
-    # Wait up to 10 seconds for output file (for short jobs)
-    while output_file and wait_time < 10:
-        if os.path.exists(output_file):
-            with open(output_file, 'rb') as f:
-                from flask import send_file
-                return send_file(
-                    output_file,
-                    as_attachment=True,
-                    download_name=os.path.basename(output_file),
-                    mimetype='text/plain'
-                )
+    
+    # *** FIX: Poll using the correct, final file path ***
+    while final_output_file_path and wait_time < 10:
+        if os.path.exists(final_output_file_path):
+            print(f"Output file found: {final_output_file_path}")
+            from flask import send_file
+            return send_file(
+                final_output_file_path,
+                as_attachment=True,
+                download_name=os.path.basename(final_output_file_path),
+                mimetype='text/plain'
+            )
+        print(f"Waiting for file: {final_output_file_path} ({wait_time+1}s)")
         time.sleep(1)
         wait_time += 1
 
-    # If not ready, return job info and let frontend poll for download
+    print("File not found after 10s, returning JSON.")
+    # If not ready, return job info
     return jsonify({
         "message": "Job submitted",
         "output": output,
         "job_id": job_id,
-        "output_file": os.path.basename(output_file) if output_file else None,
+        # *** FIX: Use the correct variable here too ***
+        "output_file": os.path.basename(final_output_file_path) if final_output_file_path else None,
         "user": username
     })
 
