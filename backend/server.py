@@ -287,10 +287,11 @@ def get_sample_resources():
             "node4": "Tesla V100"
         }
     })
-def run_command(command, cwd=None):
+def run_command(command, cwd=None, timeout=5):
     """
     Executes a shell command and returns its stdout or an error string.
-    Accepts optional `cwd` to run the command in a specific working directory.
+    Accepts optional `cwd` to run the command in a specific working directory and
+    an optional `timeout` (seconds) to override the default timeout.
     """
     try:
         result = subprocess.run(
@@ -298,17 +299,20 @@ def run_command(command, cwd=None):
             capture_output=True,
             text=True,
             check=True,
-            timeout=5,  # Short timeout for safety
+            timeout=timeout,
             cwd=cwd,
         )
         return result.stdout.strip()
     except FileNotFoundError:
         return f"error: command not found: {command[0]}"
     except subprocess.CalledProcessError as e:
-        # Return stderr if command fails
-        return f"error: command failed: {e.stderr.strip()}"
-    except subprocess.TimeoutExpired:
-        return "error: command timed out"
+        # Return stderr if command fails (include returncode for debugging)
+        stderr = e.stderr.strip() if e.stderr else ''
+        return f"error: command failed (rc={e.returncode}): {stderr}"
+    except subprocess.TimeoutExpired as e:
+        # Include partial output if available
+        out = getattr(e, 'output', '') or ''
+        return f"error: command timed out after {timeout}s. partial_output: {out}"
     except Exception as e:
         return f"error: unknown: {str(e)}"
 
@@ -832,16 +836,45 @@ def submit_sbatch():
 
     # Ensure basic SLURM directives are present
     slurm_directives = []
-    if not any(line.strip().startswith('#SBATCH') for line in content.splitlines()):
+    lines = content.splitlines()
+    has_any_sbatch = any(line.strip().startswith('#SBATCH') for line in lines)
+
+    # Ensure the script writes output into the server's user directory by
+    # converting any --output directive to an absolute path inside user_dir.
+    output_rewritten = False
+    for idx, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith('#SBATCH') and '--output' in s:
+            # split on '=' and preserve the RHS (which may include %j)
+            parts = line.split('=', 1)
+            if len(parts) == 2:
+                out_val = parts[1].strip()
+                # If the value is quoted, remove quotes
+                out_val = out_val.strip('"')
+                abs_out = os.path.join(user_dir, out_val)
+                lines[idx] = f"#SBATCH --output={abs_out}"
+                output_rewritten = True
+                print(f"Rewrote existing --output to absolute path: {lines[idx]}", flush=True)
+                break
+
+    # If there were no SBATCH directives at all, inject sensible defaults
+    if not has_any_sbatch:
         slurm_directives.extend([
             '#SBATCH --job-name=default_job',
-            f'#SBATCH --output={file.filename}-%j.out',  # output in user dir
-            f'#SBATCH --error={file.filename}-%j.err',
+            f'#SBATCH --output={os.path.join(user_dir, file.filename)}-%j.out',  # absolute output
+            f'#SBATCH --error={os.path.join(user_dir, file.filename)}-%j.err',
             '#SBATCH --time=01:00:00',
             '#SBATCH --ntasks=1'
         ])
-    if slurm_directives:
-        content = '\n'.join([content.split('\n')[0]] + slurm_directives + content.split('\n')[1:])
+        lines = [lines[0]] + slurm_directives + lines[1:]
+
+    # If there were SBATCH directives but none for --output, add one pointing to user_dir
+    if has_any_sbatch and not output_rewritten:
+        # insert after the shebang line
+        insert_at = 1
+        lines = lines[:insert_at] + [f'#SBATCH --output={os.path.join(user_dir, file.filename)}-%j.log'] + lines[insert_at:]
+
+    content = '\n'.join(lines)
 
     print(f"Processed script content:\n{content}")
 
@@ -862,9 +895,9 @@ def submit_sbatch():
 
     # Verify script is valid and check resource availability
     verify_cmd = ["sbatch", "--test-only", script_path]
-    print(f"Verifying script: {' '.join(verify_cmd)} (cwd={user_dir})")
-    verify_output = run_command(verify_cmd, cwd=user_dir)
-    print(f"Verification output: {verify_output}")
+    print(f"Verifying script: {' '.join(verify_cmd)} (cwd={user_dir})", flush=True)
+    verify_output = run_command(verify_cmd, cwd=user_dir, timeout=30)
+    print(f"Verification output: {verify_output}", flush=True)
 
     if "error" in verify_output.lower():
         error_msg = verify_output.strip()
@@ -888,9 +921,9 @@ def submit_sbatch():
 
     # Submit the job from user directory
     cmd = ["sbatch", script_path]
-    print(f"Running command: {' '.join(cmd)} in {user_dir}")
-    output = run_command(cmd, cwd=user_dir)
-    print(f"sbatch output: {output}")
+    print(f"Running command: {' '.join(cmd)} in {user_dir}", flush=True)
+    output = run_command(cmd, cwd=user_dir, timeout=30)
+    print(f"sbatch output: {output}", flush=True)
 
     # Try to parse job ID from output
     job_id = None
@@ -936,6 +969,45 @@ def submit_sbatch():
         "output_file": os.path.basename(output_file) if output_file else None,
         "user": username
     })
+
+
+@app.route('/api/job-status/<job_id>', methods=['GET'])
+def job_status(job_id):
+    """Return job state and whether an output file exists for the given job id."""
+    try:
+        # First, check squeue for running/pending state
+        squeue_out = run_command(["squeue", "-j", str(job_id), "-h", "-o", "%T"], timeout=5)
+        state = None
+        if squeue_out and "error" not in squeue_out.lower() and squeue_out.strip():
+            state = squeue_out.strip()
+        else:
+            # Fallback to sacct (may not be available on all clusters)
+            sacct_out = run_command(["sacct", "-j", str(job_id), "-n", "-o", "State"], timeout=10)
+            if sacct_out and "error" not in sacct_out.lower() and sacct_out.strip():
+                # sacct can return multiple lines; take the first non-empty
+                state = sacct_out.strip().splitlines()[0].strip()
+            else:
+                state = "UNKNOWN"
+
+        # Look for output file under files/ by scanning for job id in filenames
+        files_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'files')
+        found = None
+        for root, dirs, filenames in os.walk(files_root):
+            for fn in filenames:
+                if f"{job_id}" in fn:
+                    found = os.path.join(root, fn)
+                    break
+            if found:
+                break
+
+        return jsonify({
+            'job_id': job_id,
+            'state': state,
+            'output_exists': bool(found and os.path.exists(found)),
+            'output_path': os.path.relpath(found, start=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')) if found else None
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route("/api/submit/salloc", methods=["POST"])
 def submit_salloc():
