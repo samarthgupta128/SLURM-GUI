@@ -9,11 +9,12 @@ import termios
 import tempfile
 import struct
 import fcntl
+import getpass
 
 app = Flask(__name__)
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:5173", "http://localhost:8001"],
+        "origins": ["http://localhost:5173", "http://localhost:8080", "http://localhost:8001"],
         "methods": ["GET", "POST", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "Accept"]
     }
@@ -770,6 +771,13 @@ def get_usage():
 def submit_sbatch():
     """Handle sbatch script submission"""
     print("Received sbatch submission request")
+    try:
+        server_user = getpass.getuser()
+    except Exception:
+        server_user = None
+    # Log requester and server environment to help debug differing sbatch behavior
+    print(f"Request remote addr: {request.remote_addr}, server user: {server_user}, euid: {os.geteuid()}")
+    print(f"Server PATH: {os.environ.get('PATH')}")
     
     # Accept username from form data
 
@@ -822,7 +830,7 @@ def submit_sbatch():
 
     # Ensure basic SLURM directives are present
     slurm_directives = []
-    if not any(line.startswith('#SBATCH') for line in content.split('\n')):
+    if not any(line.strip().startswith('#SBATCH') for line in content.splitlines()):
         slurm_directives.extend([
             '#SBATCH --job-name=default_job',
             f'#SBATCH --output={file.filename}-%j.out',  # output in user dir
@@ -845,14 +853,66 @@ def submit_sbatch():
     sbatch_check = run_command(["which", "sbatch"])
     print(f"sbatch location: {sbatch_check}")
 
-    # Verify script is valid
+    # Check available resources and node status
+    sinfo_cmd = ["sinfo", "-h", "-o", "%C"]  # Get cluster resource info
+    sinfo_output = run_command(sinfo_cmd)
+    print(f"Current cluster resources: {sinfo_output}")
+    
+    # Get node status and reasons
+    sinfo_reason_cmd = ["sinfo", "-R", "-h", "-o", "%N %E"]
+    node_status = run_command(sinfo_reason_cmd)
+    print(f"Node status reasons: {node_status}")
+    
+    # Parse CPU allocation status
+    try:
+        cpu_parts = sinfo_output.strip().split('/')
+        if len(cpu_parts) == 4:
+            allocated, idle, other, total = map(int, cpu_parts)
+            if idle == 0 and allocated == 0 and other > 0:
+                error_details = {
+                    "error": "No CPUs available for job allocation",
+                    "details": {
+                        "status": "All CPUs are offline or unavailable",
+                        "reason": "Node unexpectedly rebooted" if "unexpectedly re" in node_status else "Nodes are offline",
+                        "recommendation": "Please contact your system administrator to restore node availability",
+                        "cpu_state": {
+                            "allocated": allocated,
+                            "idle": idle,
+                            "offline": other,
+                            "total": total
+                        },
+                        "node_status": node_status
+                    }
+                }
+                return jsonify(error_details), 503  # Service Unavailable
+    except Exception as e:
+        print(f"Error parsing CPU allocation status: {e}")
+
+    # Verify script is valid and check resource availability
     verify_cmd = ["sbatch", "--test-only", script_path]
     print(f"Verifying script: {' '.join(verify_cmd)}")
     verify_output = run_command(verify_cmd)
     print(f"Verification output: {verify_output}")
 
     if "error" in verify_output.lower():
-        return jsonify({"error": f"Invalid script: {verify_output}"}), 400
+        error_msg = verify_output.strip()
+        
+        # Check for specific allocation errors
+        if "allocation failure" in error_msg.lower() or "not available" in error_msg.lower():
+            # Get current cluster state for better error message
+            cluster_state = run_command(["sinfo", "-h", "-o", "%n %C"])
+            return jsonify({
+                "error": f"Resource allocation failed: {error_msg}",
+                "details": {
+                    "cluster_state": cluster_state,
+                    "verification_output": verify_output
+                }
+            }), 400
+        
+        return jsonify({
+            "error": f"Invalid script: {error_msg}",
+            "details": {"verification_output": verify_output}
+        }), 400
 
     # Submit the job from user directory
     cmd = ["sbatch", script_path]
