@@ -9,16 +9,17 @@ import termios
 import tempfile
 import struct
 import fcntl
+import getpass
 
 app = Flask(__name__)
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:5173", "http://localhost:8001"],
+        "origins": ["http://localhost:5173", "http://localhost:8080", "http://localhost:8001"],
         "methods": ["GET", "POST", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "Accept"]
     }
 })
-socketio = SocketIO(app, cors_allowed_origins=["http://localhost:5173", "http://localhost:8001"])
+socketio = SocketIO(app, cors_allowed_origins=["http://localhost:5173", "http://localhost:8080", "http://localhost:8001"])
 
 
 def run_command(cmd, shell=False):
@@ -286,9 +287,10 @@ def get_sample_resources():
             "node4": "Tesla V100"
         }
     })
-def run_command(command):
+def run_command(command, cwd=None):
     """
     Executes a shell command and returns its stdout or an error string.
+    Accepts optional `cwd` to run the command in a specific working directory.
     """
     try:
         result = subprocess.run(
@@ -296,7 +298,8 @@ def run_command(command):
             capture_output=True,
             text=True,
             check=True,
-            timeout=5  # Short timeout for safety
+            timeout=5,  # Short timeout for safety
+            cwd=cwd,
         )
         return result.stdout.strip()
     except FileNotFoundError:
@@ -770,6 +773,13 @@ def get_usage():
 def submit_sbatch():
     """Handle sbatch script submission"""
     print("Received sbatch submission request")
+    try:
+        server_user = getpass.getuser()
+    except Exception:
+        server_user = None
+    # Log requester and server environment to help debug differing sbatch behavior
+    print(f"Request remote addr: {request.remote_addr}, server user: {server_user}, euid: {os.geteuid()}")
+    print(f"Server PATH: {os.environ.get('PATH')}")
     
     # Accept username from form data
 
@@ -822,7 +832,7 @@ def submit_sbatch():
 
     # Ensure basic SLURM directives are present
     slurm_directives = []
-    if not any(line.startswith('#SBATCH') for line in content.split('\n')):
+    if not any(line.strip().startswith('#SBATCH') for line in content.splitlines()):
         slurm_directives.extend([
             '#SBATCH --job-name=default_job',
             f'#SBATCH --output={file.filename}-%j.out',  # output in user dir
@@ -845,19 +855,41 @@ def submit_sbatch():
     sbatch_check = run_command(["which", "sbatch"])
     print(f"sbatch location: {sbatch_check}")
 
-    # Verify script is valid
+    # Check available resources first
+    sinfo_cmd = ["sinfo", "-h", "-o", "%C"]  # Get cluster resource info
+    sinfo_output = run_command(sinfo_cmd)
+    print(f"Current cluster resources: {sinfo_output}")
+
+    # Verify script is valid and check resource availability
     verify_cmd = ["sbatch", "--test-only", script_path]
-    print(f"Verifying script: {' '.join(verify_cmd)}")
-    verify_output = run_command(verify_cmd)
+    print(f"Verifying script: {' '.join(verify_cmd)} (cwd={user_dir})")
+    verify_output = run_command(verify_cmd, cwd=user_dir)
     print(f"Verification output: {verify_output}")
 
     if "error" in verify_output.lower():
-        return jsonify({"error": f"Invalid script: {verify_output}"}), 400
+        error_msg = verify_output.strip()
+        
+        # Check for specific allocation errors
+        if "allocation failure" in error_msg.lower() or "not available" in error_msg.lower():
+            # Get current cluster state for better error message
+            cluster_state = run_command(["sinfo", "-h", "-o", "%n %C"])
+            return jsonify({
+                "error": f"Resource allocation failed: {error_msg}",
+                "details": {
+                    "cluster_state": cluster_state,
+                    "verification_output": verify_output
+                }
+            }), 400
+        
+        return jsonify({
+            "error": f"Invalid script: {error_msg}",
+            "details": {"verification_output": verify_output}
+        }), 400
 
     # Submit the job from user directory
     cmd = ["sbatch", script_path]
     print(f"Running command: {' '.join(cmd)} in {user_dir}")
-    output = run_command(cmd)
+    output = run_command(cmd, cwd=user_dir)
     print(f"sbatch output: {output}")
 
     # Try to parse job ID from output
