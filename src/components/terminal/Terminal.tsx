@@ -24,8 +24,9 @@ const Terminal = ({ onClose }: TerminalProps) => {
     }
 
     console.log('Attempting to connect to socket.io with session:', sessionId);
-    // Let socket.io-client choose transports (polling -> websocket if available).
-    const socket = io('http://localhost:8000', {
+    // Connect to current origin and use the proxied socket.io path
+    const socket = io(window.location.origin, {
+      path: '/socket.io',
       reconnectionAttempts: 10,
       timeout: 20000,
     });
