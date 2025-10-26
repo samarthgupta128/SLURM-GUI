@@ -8,19 +8,21 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
-      proxy: {
-        '/api': {
-          target: 'http://localhost:8001',
-          changeOrigin: true,
-          secure: false,
-        },
-        '/socket.io': {
-          target: 'http://localhost:8001',
-          changeOrigin: true,
-          secure: false,
-          ws: true
-        }
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api/, '/api')
+      },
+      '/socket.io': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+        secure: false,
+        ws: true,
+        rewrite: (path) => path
       }
+    }
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {

@@ -49,10 +49,10 @@ def run_command(cmd, shell=False):
         return str(e)
 
 def create_terminal_session(resource_params):
-    """Create a new terminal session with salloc using simplest working approach"""
+    """Create a new terminal session with salloc using pty.fork()"""
     print(f"Creating terminal session with params: {resource_params}")
     
-    # Build salloc command with minimal parameters and add bash directly
+    # Build salloc command
     salloc_cmd = ["salloc"]
     if resource_params.get("nodes"):
         salloc_cmd.extend(["--nodes", str(resource_params["nodes"])])
@@ -70,7 +70,7 @@ def create_terminal_session(resource_params):
     master_fd, slave_fd = pty.openpty()
 
     try:
-        # Set terminal size on the slave PTY (master_fd is for reading/writing)
+        # Set terminal size on the slave PTY
         rows, cols = 24, 80  # Default size
         winsize = struct.pack('HHHH', rows, cols, 0, 0)
         try:
@@ -78,86 +78,40 @@ def create_terminal_session(resource_params):
         except Exception as ex:
             print(f"Warning: could not set window size on slave PTY: {ex}")
         
-        # Start salloc process with PTY
-        # Use pty.fork() so the child has the PTY as its controlling terminal.
-        pid, master_fd = pty.fork()
+        # Fork. The child process gets the PTY as its controlling terminal.
+        pid = pty.fork()
+
         if pid == 0:
-            # Child: replace process with salloc + /bin/bash
+            # CHILD process
+            
+            # We don't need the master_fd in the child
+            os.close(master_fd) 
+            
             try:
-                # set session env
+                # Set session env
                 os.environ['TERM'] = 'xterm'
-                # Execute salloc command
+                # Execute salloc command. This REPLACES the child process.
+                # The slave_fd will be its stdin, stdout, stderr.
                 os.execvp(salloc_cmd[0], salloc_cmd)
             except Exception as e:
                 print(f"Failed to exec salloc: {e}")
                 os._exit(1)
 
-        # Parent: pid is child pid, master_fd is file descriptor for IO
+        # PARENT process
+        
+        # We don't need the slave_fd in the parent
+        os.close(slave_fd) 
+        
         print(f"Started child salloc pid={pid} with master_fd={master_fd}")
+        
+        # Return the master_fd (for I/O) and the child's pid (for management)
         return master_fd, {'pid': pid}
-
-        # Close slave fd, we'll use master to communicate
-        os.close(slave_fd)
-        print("Started salloc process with PTY")
-        
-        return master_fd, process
         
     except Exception as e:
         print(f"Error in create_terminal_session: {str(e)}")
         os.close(master_fd)
         os.close(slave_fd)
-        if 'process' in locals():
-            process.terminate()
         raise
-        print(f"salloc stdout: {stdout}")
-        print(f"salloc stderr: {stderr}")
-        
-        if salloc_process.returncode != 0:
-            raise Exception(f"salloc failed: {stderr}")
-
-        # Parse the job ID from salloc output
-        import re
-        job_id_match = re.search(r"Granted job allocation (\d+)", stdout)
-        if not job_id_match:
-            raise Exception(f"Could not find job ID in salloc output. Output was: {stdout}")
-
-        job_id = job_id_match.group(1)
-        print(f"Got job ID: {job_id}")
-
-        # Now start an interactive shell using srun
-        srun_cmd = ["srun", "--jobid", job_id, "/bin/bash"]
-        print(f"Starting srun with command: {' '.join(srun_cmd)}")
-        
-        process = subprocess.Popen(
-            srun_cmd,
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            preexec_fn=os.setsid
-        )
-
-        # Close slave fd, we'll use master to communicate
-        os.close(slave_fd)
-        print("Interactive shell started successfully")
-        
-        return master_fd, process
-
-    except subprocess.TimeoutExpired:
-        print("salloc timed out after 10 seconds")
-        if 'salloc_process' in locals():
-            salloc_process.terminate()
-        os.close(master_fd)
-        os.close(slave_fd)
-        raise Exception("Resource allocation timed out. No resources may be immediately available.")
-        
-    except Exception as e:
-        print(f"Error in create_terminal_session: {str(e)}")
-        if 'salloc_process' in locals():
-            salloc_process.terminate()
-        os.close(master_fd)
-        os.close(slave_fd)
-        raise
-
 
 @app.route("/api/queue", methods=["GET"])
 def get_queue():
