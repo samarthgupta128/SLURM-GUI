@@ -1,14 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_socketio import SocketIO, emit
 import subprocess
-import pty
 import os
-import select
-import termios
-import tempfile
-import struct
-import fcntl
 import getpass
 
 app = Flask(__name__)
@@ -19,99 +12,41 @@ CORS(app, resources={
         "allow_headers": ["Content-Type", "Authorization", "Accept"]
     }
 })
-socketio = SocketIO(app, cors_allowed_origins=["http://localhost:5173", "http://localhost:8080", "http://localhost:8001"])
 
 
-def run_command(cmd, shell=False):
+def run_command(cmd, shell=False, cwd=None):
     try:
         # `capture_output` and `text` keywords were added in Python 3.7+.
         # For Python 3.6 compatibility we explicitly capture stdout/stderr
         # and use `universal_newlines=True` to get text output.
-        if shell:
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,
-            )
-        else:
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,
-            )
+        result = subprocess.run(
+            cmd,
+            shell=shell,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            cwd=cwd,
+            timeout=30  # Add timeout to prevent hanging
+        )
         stdout = result.stdout or ''
         stderr = result.stderr or ''
-        return stdout if result.returncode == 0 else stderr
-    except Exception as e:
-        return str(e)
-
-def create_terminal_session(resource_params):
-    """Create a new terminal session with salloc using pty.fork()"""
-    print(f"Creating terminal session with params: {resource_params}")
-    
-    # Build salloc command
-    salloc_cmd = ["salloc"]
-    if resource_params.get("nodes"):
-        salloc_cmd.extend(["--nodes", str(resource_params["nodes"])])
-    if resource_params.get("memory"):
-        salloc_cmd.extend(["--mem", f"{resource_params['memory']}G"])
-    if resource_params.get("time"):
-        salloc_cmd.extend(["--time", f"{resource_params['time']}:00:00"])
-    
-    # Add bash at the end to start shell immediately
-    salloc_cmd.append("/bin/bash")
-
-    print(f"Running salloc command: {' '.join(salloc_cmd)}")
-
-    # Create pseudo-terminal
-    master_fd, slave_fd = pty.openpty()
-
-    try:
-        # Set terminal size on the slave PTY
-        rows, cols = 24, 80  # Default size
-        winsize = struct.pack('HHHH', rows, cols, 0, 0)
-        try:
-            fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
-        except Exception as ex:
-            print(f"Warning: could not set window size on slave PTY: {ex}")
         
-        # Fork. The child process gets the PTY as its controlling terminal.
-        pid = pty.fork()
-
-        if pid == 0:
-            # CHILD process
+        # If the command failed, include both stdout and stderr in the response
+        if result.returncode != 0:
+            error_msg = f"Command failed with code {result.returncode}\n"
+            if stderr:
+                error_msg += f"stderr: {stderr}\n"
+            if stdout:
+                error_msg += f"stdout: {stdout}"
+            return error_msg.strip()
             
-            # We don't need the master_fd in the child
-            os.close(master_fd) 
-            
-            try:
-                # Set session env
-                os.environ['TERM'] = 'xterm'
-                # Execute salloc command. This REPLACES the child process.
-                # The slave_fd will be its stdin, stdout, stderr.
-                os.execvp(salloc_cmd[0], salloc_cmd)
-            except Exception as e:
-                print(f"Failed to exec salloc: {e}")
-                os._exit(1)
-
-        # PARENT process
-        
-        # We don't need the slave_fd in the parent
-        os.close(slave_fd) 
-        
-        print(f"Started child salloc pid={pid} with master_fd={master_fd}")
-        
-        # Return the master_fd (for I/O) and the child's pid (for management)
-        return master_fd, {'pid': pid}
-        
+        return stdout.strip()
+    except subprocess.TimeoutExpired:
+        return "Error: Command timed out"
     except Exception as e:
-        print(f"Error in create_terminal_session: {str(e)}")
-        os.close(master_fd)
-        os.close(slave_fd)
-        raise
+        return f"Error: {str(e)}"
+
+
 
 @app.route("/api/queue", methods=["GET"])
 def get_queue():
@@ -382,10 +317,13 @@ def get_resources():
         
         # Check if sinfo is available
         sinfo_check = run_command(["which", "sinfo"])
-        if "error" in sinfo_check or not sinfo_check:
+        print(f"sinfo check result: {sinfo_check}")  # Debug log
+        
+        if "error" in sinfo_check.lower() or not sinfo_check:
             print("SLURM sinfo command not found in PATH")
             debug_info["error"] = "sinfo not found in PATH"
             debug_info["path"] = os.environ.get("PATH", "")
+            debug_info["sinfo_check"] = sinfo_check
             return jsonify({
                 "error": "SLURM commands not available",
                 "debug": debug_info,
@@ -398,7 +336,27 @@ def get_resources():
                 "partitions": [],
                 "nodes": [],
                 "gpu_nodes": {}
-            })
+            }), 503  # Service Unavailable
+    
+        # Test sinfo directly
+        test_output = run_command(["sinfo", "--version"])
+        print(f"sinfo version test: {test_output}")  # Debug log
+        if "error" in test_output.lower():
+            debug_info["error"] = "sinfo test failed"
+            debug_info["test_output"] = test_output
+            return jsonify({
+                "error": "SLURM commands failed",
+                "debug": debug_info,
+                "total_nodes": 0,
+                "allocated_nodes": 0,
+                "total_cpus": 0,
+                "allocated_cpus": 0,
+                "total_memory_mb": 0,
+                "allocated_memory_mb": 0,
+                "partitions": [],
+                "nodes": [],
+                "gpu_nodes": {}
+            }), 503  # Service Unavailable
     
         # Get node information with detailed CPU, memory, and state
         # -h skips the header line
@@ -409,13 +367,43 @@ def get_resources():
             "-o",       # Format
             "%N|%t|%C|%m|%e|%P" # name|state|CPUs(A/I/O/T)|memory|free_mem|partition
         ])
+        print(f"Node information command output: {node_output}")  # Debug log
 
         raw_node_output = node_output # Keep raw output for debugging
 
-        if "error" in node_output:
-            raise Exception(f"Failed to get node information: {node_output}")
-        if not node_output:
-            raise Exception("Got empty node information from sinfo")
+        if "error" in node_output.lower():
+            debug_info["node_error"] = node_output
+            print(f"Failed to get node information: {node_output}")
+            return jsonify({
+                "error": "Failed to get node information",
+                "debug": debug_info,
+                "total_nodes": 0,
+                "allocated_nodes": 0,
+                "total_cpus": 0,
+                "allocated_cpus": 0,
+                "total_memory_mb": 0,
+                "allocated_memory_mb": 0,
+                "partitions": [],
+                "nodes": [],
+                "gpu_nodes": {}
+            }), 503  # Service Unavailable
+            
+        if not node_output.strip():
+            debug_info["error"] = "Empty node information"
+            print("Got empty node information from sinfo")
+            return jsonify({
+                "error": "No node information available",
+                "debug": debug_info,
+                "total_nodes": 0,
+                "allocated_nodes": 0,
+                "total_cpus": 0,
+                "allocated_cpus": 0,
+                "total_memory_mb": 0,
+                "allocated_memory_mb": 0,
+                "partitions": [],
+                "nodes": [],
+                "gpu_nodes": {}
+            }), 503  # Service Unavailable
 
         nodes = []
         total_cpus = total_allocated_cpus = 0
@@ -727,13 +715,13 @@ def get_usage():
 def submit_sbatch():
     """Handle sbatch script submission"""
     print("Received sbatch submission request")
-    try:
+    '''    try:
         server_user = getpass.getuser()
-    except Exception:
+except Exception:
         server_user = None
     # Log requester and server environment to help debug differing sbatch behavior
     print(f"Request remote addr: {request.remote_addr}, server user: {server_user}, euid: {os.geteuid()}")
-    print(f"Server PATH: {os.environ.get('PATH')}")
+    print(f"Server PATH: {os.environ.get('PATH')}")'''
     
     # Accept username from form data
 
@@ -809,7 +797,7 @@ def submit_sbatch():
     sbatch_check = run_command(["which", "sbatch"])
     print(f"sbatch location: {sbatch_check}")
 
-    # Check available resources first
+    '''    # Check available resources first
     sinfo_cmd = ["sinfo", "-h", "-o", "%C"]  # Get cluster resource info
     sinfo_output = run_command(sinfo_cmd)
     print(f"Current cluster resources: {sinfo_output}")
@@ -839,7 +827,7 @@ def submit_sbatch():
             "error": f"Invalid script: {error_msg}",
             "details": {"verification_output": verify_output}
         }), 400
-
+    '''
     # Submit the job from user directory
     cmd = ["sbatch", script_path]
     print(f"Running command: {' '.join(cmd)} in {user_dir}")
@@ -891,36 +879,7 @@ def submit_sbatch():
         "user": username
     })
 
-@app.route("/api/submit/salloc", methods=["POST"])
-def submit_salloc():
-    """Start an interactive salloc session"""
-    try:
-        params = request.get_json()
-        if not params:
-            return jsonify({"error": "No parameters provided"}), 400
-            
-        # Create terminal session
-        master_fd, process = create_terminal_session(params)
-        
-        # Store session info (you might want to use Redis or similar for production)
-        session_id = os.urandom(16).hex()
-        app.terminal_sessions[session_id] = {
-            "fd": master_fd,
-            "process": process
-        }
-        # process may be a Popen or a dict {'pid': pid}
-        try:
-            pid_info = process.pid
-        except Exception:
-            pid_info = process.get('pid') if isinstance(process, dict) else None
-        print(f"Session created: {session_id}, fd={master_fd}, pid={pid_info}")
-        
-        return jsonify({
-            "message": "Session created",
-            "session_id": session_id
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+
 
 
 @app.route("/api/cancel/<job_id>", methods=["DELETE"])
@@ -950,140 +909,7 @@ def debug_sessions():
     })
 
 
-# WebSocket handlers for terminal interaction
-@socketio.on('connect')
-def connect():
-    """Handle new WebSocket connections"""
-    print("Client connected")
 
-@socketio.on('disconnect')
-def disconnect():
-    """Handle WebSocket disconnections"""
-    print("Client disconnected")
-    # Cleanup any associated terminal session
-
-
-@socketio.on('terminal_connect')
-def handle_terminal_connect(data):
-    """Associate a Socket.IO connection with a terminal session_id and start output reader."""
-    session_id = data.get('session_id')
-    if not session_id:
-        emit('terminal_error', {'error': 'No session_id provided'})
-        return
-
-    # Store mapping from session_id to Socket.IO sid
-    sid = request.sid
-    app.session_sids[session_id] = sid
-    print(f"Terminal connect: session {session_id} -> sid {sid}")
-
-    # Start a background reader to emit terminal output to this client
-    import threading
-    reader_thread = threading.Thread(target=read_terminal_output, args=(session_id,), daemon=True)
-    reader_thread.start()
-
-    emit('terminal_connected', {'session_id': session_id})
-
-@socketio.on('terminal_input')
-def handle_terminal_input(data):
-    """Handle input from the frontend terminal"""
-    session_id = data.get('session_id')
-    input_data = data.get('input')
-    
-    if not session_id or not input_data:
-        return
-        
-    session = app.terminal_sessions.get(session_id)
-    if not session:
-        # try to emit to the requesting client if sid provided
-        sid = request.sid
-        if sid:
-            socketio.emit('terminal_error', {'error': 'Session not found'}, to=sid)
-        else:
-            emit('terminal_error', {'error': 'Session not found'})
-        return
-        
-    try:
-        print(f"Received terminal input for session {session_id}: {repr(input_data)}")
-        os.write(session['fd'], input_data.encode())
-    except Exception as e:
-        sid = request.sid
-        if sid:
-            socketio.emit('terminal_error', {'error': str(e)}, to=sid)
-        else:
-            emit('terminal_error', {'error': str(e)})
-
-def read_terminal_output(session_id):
-    """Read and emit terminal output"""
-    session = app.terminal_sessions.get(session_id)
-    if not session:
-        return
-        
-    # emit only to the connected websocket client for this session, if known
-    sid = app.session_sids.get(session_id)
-    proc = session.get('process')
-    while True:
-        # If the process has exited, notify client and stop
-        try:
-            # If proc is a Popen, use poll(); if it's a dict from pty.fork, use waitpid with WNOHANG
-            if isinstance(proc, dict) and proc.get('pid'):
-                pid = proc.get('pid')
-                try:
-                    waited = os.waitpid(pid, os.WNOHANG)
-                    if waited[0] == pid:
-                        exit_code = waited[1]
-                        print(f"Child pid {pid} exited with status {exit_code}")
-                        if sid:
-                            socketio.emit('terminal_error', {'error': 'Terminal process exited'}, to=sid)
-                        else:
-                            socketio.emit('terminal_error', {'error': 'Terminal process exited'})
-                        break
-                except ChildProcessError:
-                    # Already reaped
-                    break
-            elif hasattr(proc, 'poll'):
-                if proc.poll() is not None:
-                    exit_code = proc.returncode
-                    print(f"Process for session {session_id} exited with code {exit_code}")
-                    if sid:
-                        socketio.emit('terminal_error', {'error': 'Terminal process exited'}, to=sid)
-                    else:
-                        socketio.emit('terminal_error', {'error': 'Terminal process exited'})
-                    break
-
-            r, _, _ = select.select([session['fd']], [], [], 0.1)
-            if session['fd'] in r:
-                try:
-                    data = os.read(session['fd'], 4096)
-                except OSError as e:
-                    print(f"OS read error for session {session_id}: {e}")
-                    break
-
-                if not data:
-                    # No data; loop again and check process
-                    continue
-
-                try:
-                    text = data.decode(errors='replace')
-                except Exception as e:
-                    print(f"Decode error for session {session_id}: {e}")
-                    text = repr(data)
-
-                payload = {
-                    'session_id': session_id,
-                    'output': text
-                }
-                print(f"Emitting terminal output for session {session_id}: {repr(payload['output'])}")
-                if sid:
-                    socketio.emit('terminal_output', payload, to=sid)
-                else:
-                    socketio.emit('terminal_output', payload)
-        except Exception as e:
-            print(f"Unexpected error in read_terminal_output for {session_id}: {e}")
-            break
-
-# Initialize terminal sessions storage
-app.terminal_sessions = {}
-app.session_sids = {}
 
 if __name__ == '__main__':
     try:
@@ -1095,17 +921,11 @@ if __name__ == '__main__':
         else:
             print(f"sbatch found at: {sbatch_path}")
             
-        salloc_path = run_command(["which", "salloc"])
-        if not salloc_path:
-            print("WARNING: salloc not found in PATH")
-        else:
-            print(f"salloc found at: {salloc_path}")
-            
         sinfo_test = run_command(["sinfo", "--version"])
         print(f"sinfo version check: {sinfo_test}")
         
         print("\nStarting server on http://0.0.0.0:8001")
-        socketio.run(app, host='0.0.0.0', port=8001, debug=True)
+        app.run(host='0.0.0.0', port=8001, debug=True)
     except Exception as e:
         print(f"Error starting server: {e}")
         import traceback

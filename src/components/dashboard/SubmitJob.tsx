@@ -33,7 +33,7 @@ const SubmitJob = () => {
       formData.append('username', 'testuser'); // TODO: Replace with actual username
       formData.append('file', selectedFile);
 
-      const response = await fetch('http://localhost:8000/api/submit/sbatch', {
+      const response = await fetch('/api/submit/sbatch', {
         method: 'POST',
         body: formData,
       });
