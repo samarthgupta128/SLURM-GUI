@@ -10,7 +10,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
   "backend": "backend/venv/bin/python3 backend/server.py",
-    "start:all": "concurrently \"npm run dev\" \"npm run backend\""
+    "start:all": "concurrently \"npm run dev -- --host\" \"npm run backend\""
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
