@@ -159,7 +159,7 @@ This project is licensed under the **MIT License** — feel free to modify and d
 
 ## 📬 Contact
 
-**Author:** [Samarth Gupta](https://github.com/samarthgupta128)  
+**Author:** [Samarth Gupta](https://github.com/samarthgupta128), Yatin Saini , Shiva Singh , Satyam Kaushik.  
 **Project Repository:** [SLURM-GUI](https://github.com/samarthgupta128/SLURM-GUI)  
 For questions, suggestions, or collaboration, open an issue or contact via GitHub.
 
